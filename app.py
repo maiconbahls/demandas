@@ -651,6 +651,7 @@ class NavigationSystem:
         /* Estilização Geral de Botões de Nav */
         /* Estilização Geral de Botões de Nav */
         div.stButton > button {
+            color: white !important;
             border-radius: 12px !important;
             border: 1px solid rgba(255,255,255,0.05) !important;
             background: rgba(255,255,255,0.03) !important;
@@ -701,6 +702,12 @@ class NavigationSystem:
             border: 1px solid rgba(255,255,255,0.05) !important;
             border-radius: 12px !important;
             height: 42px !important;
+            color: white !important;
+        }
+        
+        div[data-testid="stSelectbox"] div, 
+        div[data-testid="stTextInput"] input {
+            color: white !important;
         }
         
         div[data-testid="stSelectbox"] > div > div:hover,
@@ -2561,6 +2568,34 @@ def load_custom_css() -> None:
         """
         <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+        
+        /* FORÇAR MODO ESCURO GERAL (Resiliência contra tema Light) */
+        h1, h2, h3, h4, h5, h6, p, span, div, label {
+            color: #f8fafc;
+        }
+        
+        .stTextInput input, .stTextArea textarea, .stSelectbox div[data-baseweb="select"] > div, .stDateInput input {
+            color: white !important;
+            -webkit-text-fill-color: white !important;
+            caret-color: #6366f1 !important;
+        }
+        
+        /* Corrigir Selectbox Dropdown (Opções) */
+        ul[data-testid="stSelectboxVirtualDropdown"] {
+            background-color: #1e293b !important;
+        }
+        li[role="option"] {
+            background-color: #1e293b !important;
+            color: white !important;
+        }
+        li[role="option"]:hover, li[role="option"][aria-selected="true"] {
+             background-color: #6366f1 !important;
+        }
+        
+        /* Garantia para SVG Icons nos Selects */
+        div[data-testid="stSelectbox"] svg {
+            fill: #94a3b8 !important;
+        }
         
         :root {
             --bg-deep: #0f172a;
