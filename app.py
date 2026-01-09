@@ -3232,13 +3232,23 @@ class ManagerDashboardView:
 def initialize_app() -> None:
     st.set_page_config(**PAGE_CONFIG)
     load_custom_css()
-    dm = DataManager()
+    if "data_manager" not in st.session_state:
+        st.session_state.data_manager = DataManager()
+    
+    # --- STATUS DO BANCO DE DADOS (VISUALIZAÇÃO) ---
+    with st.sidebar:
+        dm = st.session_state.data_manager
+        if hasattr(dm, 'use_sheets') and dm.use_sheets:
+            st.success("☁️ Conectado: Google Sheets")
+        else:
+            st.warning("📂 Conectado: Arquivos Locais")
+            
     if "categories" not in st.session_state:
-        st.session_state.categories = dm.load_categories()
+        st.session_state.categories = st.session_state.data_manager.load_categories()
     if "tasks" not in st.session_state:
-        st.session_state.tasks = dm.load_tasks()
+        st.session_state.tasks = st.session_state.data_manager.load_tasks()
     if "requests" not in st.session_state:
-        st.session_state.requests = dm.load_requests()
+        st.session_state.requests = st.session_state.data_manager.load_requests()
 
     if "show_modal" not in st.session_state:
         st.session_state.show_modal = False
