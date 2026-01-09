@@ -1,0 +1,63 @@
+{
+  "📚 Bolsas de Estudos": {
+    "color": "#fdab3d",
+    "icon": "📚",
+    "name": "Bolsas de Estudos",
+    "bg": "#5a4a2a"
+  },
+  "🎓 Incentivo à Educação (ETEC)": {
+    "color": "#e44258",
+    "icon": "🎓",
+    "name": "Incentivo à Educação (ETEC)",
+    "bg": "#4a2a2f"
+  },
+  "💼 Programa de Estágio": {
+    "color": "#00c875",
+    "icon": "💼",
+    "name": "Programa de Estágio",
+    "bg": "#1f4a3c"
+  },
+  "📊 Indicadores da Área": {
+    "color": "#00d9ff",
+    "icon": "📊",
+    "name": "Indicadores da Área",
+    "bg": "#1f3d4a"
+  },
+  "⚙️ Projeto de Desenvolvimento": {
+    "color": "#579bfc",
+    "icon": "⚙️",
+    "name": "Projeto de Desenvolvimento",
+    "bg": "#2a3d5a"
+  },
+  "🤝 Relacionamento com Instituições": {
+    "color": "#a25ddc",
+    "icon": "🤝",
+    "name": "Relacionamento com Instituições",
+    "bg": "#3d2a5a"
+  },
+  "🏢 Deskbee": {
+    "color": "#00cd8e",
+    "icon": "🏢",
+    "name": "Deskbee",
+    "bg": "#1f4a3c"
+  },
+  "👥 Pessoas/Atendimentos": {
+    "color": "#ff5ac4",
+    "icon": "👥",
+    "name": "Pessoas/Atendimentos",
+    "bg": "#4a2a4a"
+  },
+  "📋 Outros": {
+    "color": "#9699a6",
+    "icon": "📋",
+    "name": "Outros",
+    "bg": "#3d3d4a"
+  },
+  "📌 Jovem Profissional": {
+    "color": "#d946ef",
+    "icon": "📌",
+    "name": "Jovem Profissional",
+    "bg": "#d946ef22",
+    "owner": "2858700"
+  }
+}

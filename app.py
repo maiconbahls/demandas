@@ -47,7 +47,7 @@ PRIORITY_CONFIG = {
     'Urgente': {'color': '#df2f4a', 'bg': '#4a2a2f'}
 }
 
-CATEGORY_OPTIONS = {
+DEFAULT_CATEGORY_OPTIONS = {
     "📚 Bolsas de Estudos": {
         "color": "#fdab3d", "icon": "📚", "name": "Bolsas de Estudos", "bg": "#5a4a2a"
     },
@@ -153,85 +153,357 @@ class Task:
         return self.priority == "Urgente" and self.status != "Concluído" and self.due_date == today
     
     def get_category_info(self) -> Dict:
-        for key, info in CATEGORY_OPTIONS.items():
+        # Use session state categories if available, else default
+        cats = st.session_state.get("categories", DEFAULT_CATEGORY_OPTIONS)
+        for key, info in cats.items():
             if info["name"] == self.category or key == self.category:
                 return info
-        return CATEGORY_OPTIONS["📋 Outros"]
+        return cats.get("📋 Outros", DEFAULT_CATEGORY_OPTIONS["📋 Outros"])
+
+@dataclass
+class RequestRC:
+    subelement: str = "RC"
+    date_opening: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d"))
+    description: str = ""
+    rc_code: str = ""
+    buyer: str = ""
+    situation: str = "Pendente"
+    attachments: List[str] = field(default_factory=list)
+    po_number: str = ""
+    nf_tracking: str = "Aguardando recebimento"
+    nf_attachments: List[str] = field(default_factory=list)
+    id: int = field(default_factory=lambda: int(time.time() * 1000))
+    created_at: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d"))
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "RequestRC":
+        return cls(**data)
+
+
+# ==========================================
+# GERENCIADOR DE DADOS
+# ==========================================
+
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
 # ==========================================
 # GERENCIADOR DE DADOS
 # ==========================================
 
 class DataManager:
-    def __init__(self, file_path: str = DATA_FILE):
-        self.file_path = file_path
-        self.updates_path = UPDATES_FILE
+    def __init__(self, file_path: str = None):
+        # Identificar usuário atual para isolamento de dados
+        user_id = st.session_state.get("current_user", "2949400") # Padrão: Maicon
+        self.user_id = user_id
+        
+        # Paths locais (Legacy/Fallback)
+        if user_id == "2949400":
+            self.file_path = DATA_FILE
+            self.updates_path = UPDATES_FILE
+            self.categories_path = "flow_categories.json"
+            self.requests_path = "flow_requests.json"
+        else:
+            self.file_path = f"flow_data_{user_id}.json"
+            self.updates_path = f"flow_updates_{user_id}.json"
+            self.categories_path = f"flow_categories_{user_id}.json"
+            self.requests_path = f"flow_requests_{user_id}.json"
+            
+        if file_path:
+            self.file_path = file_path
+
+        # Verificar se deve usar Google Sheets (apenas se secrets existirem)
+        self.use_sheets = False
+        self.sheet_key = None
+        self.gc = None
+        
+        if "gcp_service_account" in st.secrets:
+            try:
+                self.use_sheets = True
+                self._connect_sheets()
+            except Exception as e:
+                print(f"Erro ao conectar com Google Sheets: {e}")
+                self.use_sheets = False # Fallback para local
     
+    def _connect_sheets(self):
+        # Escopos necessários
+        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+        
+        # Criar credenciais a partir dos secrets
+        service_account_info = st.secrets["gcp_service_account"]
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
+        
+        # Autorizar
+        self.gc = gspread.authorize(creds)
+        
+        # Abrir planilha (busca pelo nome que deve estar nos secrets também, ou hardcoded 'FlowData')
+        sheet_name = st.secrets.get("SHEET_NAME", "FlowData")
+        try:
+            self.sh = self.gc.open(sheet_name)
+        except gspread.SpreadsheetNotFound:
+            # Tentar criar se não existir (se tiver permissão, senão erro)
+            try:
+                self.sh = self.gc.create(sheet_name)
+                # Compartilhar com o email do usuário se definido
+                user_email = st.secrets.get("USER_EMAIL")
+                if user_email:
+                    self.sh.share(user_email, perm_type='user', role='writer')
+            except:
+                raise Exception("Planilha não encontrada e erro ao criar.")
+
+    def _get_worksheet(self, name: str):
+        if not self.use_sheets: return None
+        try:
+            return self.sh.worksheet(name)
+        except:
+            # Se não existir a aba, cria
+            return self.sh.add_worksheet(title=name, rows=1000, cols=10)
+
+    # ---- Categorias ----
+    def load_categories(self) -> Dict:
+        # Se usar Sheets
+        if self.use_sheets:
+            try:
+                ws = self._get_worksheet("Categories")
+                records = ws.get_all_records()
+                # Converter lista de registros para Dict estrturado
+                cats = {}
+                for row in records:
+                    key = row.get("key")
+                    if key:
+                         cats[key] = {
+                             "color": row.get("color"),
+                             "icon": row.get("icon"),
+                             "name": row.get("name"),
+                             "bg": row.get("bg")
+                         }
+                if not cats: return DEFAULT_CATEGORY_OPTIONS.copy()
+                return cats
+            except:
+                return DEFAULT_CATEGORY_OPTIONS.copy()
+
+        # Fallback Local
+        user_id = st.session_state.get("current_user", "2949400")
+        is_admin = user_id in ["2949400", "2484901", "GESTAO"]
+        
+        if not os.path.exists(self.categories_path):
+            if is_admin: return DEFAULT_CATEGORY_OPTIONS.copy()
+            else: return {}
+        try:
+            with open(self.categories_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+             return DEFAULT_CATEGORY_OPTIONS.copy() if is_admin else {}
+
+    # ---- Requisições (RC/PO) ----
+    def load_requests(self) -> List[RequestRC]:
+        if self.use_sheets:
+            try:
+                ws = self._get_worksheet("Requests")
+                records = ws.get_all_records()
+                # Filtrar por usuário se não for admin (implementar lógica de admin aqui se necessário)
+                return [RequestRC.from_dict({k: v for k, v in r.items() if k != 'attachments_str' and k in RequestRC.__annotations__}) for r in records]
+            except:
+                return []
+
+        # Local
+        user_id = st.session_state.get("current_user", "2949400")
+        if user_id in ["GESTAO", "2484901"]:
+            # Logic for reading all files for admin... (Simplificado para manter o foco)
+            pass 
+        
+        if not os.path.exists(self.requests_path): return []
+        try:
+            with open(self.requests_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return [RequestRC.from_dict(item) for item in data]
+        except: return []
+
+    def save_requests(self, requests: List[RequestRC]) -> bool:
+        if self.use_sheets:
+            try:
+                ws = self._get_worksheet("Requests")
+                data = [r.to_dict() for r in requests]
+                # Para sheets, precisamos garantir que listas virem strings
+                formatted_data = []
+                for item in data:
+                    new_item = item.copy()
+                    new_item['attachments'] = str(item['attachments']) # Flatten list
+                    new_item['nf_attachments'] = str(item['nf_attachments'])
+                    formatted_data.append(new_item)
+                
+                # Update full sheet
+                if formatted_data:
+                    ws.clear()
+                    # Headers
+                    ws.append_row(list(formatted_data[0].keys()))
+                    # Rows
+                    rows = [list(d.values()) for d in formatted_data]
+                    ws.append_rows(rows)
+                else:
+                    ws.clear()
+                return True
+            except Exception as e:
+                st.error(f"Erro Cloud: {e}")
+                return False
+
+        # Local
+        try:
+            with open(self.requests_path, "w", encoding="utf-8") as f:
+                json.dump([r.to_dict() for r in requests], f, ensure_ascii=False, indent=2)
+            return True
+        except: return False
+
     # ---- Tarefas ----
     def load_tasks(self) -> List[Task]:
+        # --- GOOGLE SHEETS ---
+        if self.use_sheets:
+            try:
+                ws = self._get_worksheet("Tasks")
+                records = ws.get_all_records()
+                
+                tasks = []
+                for r in records:
+                    # Converter string de list de volta para list
+                    if 'attachments' in r and isinstance(r['attachments'], str):
+                        try:
+                            r['attachments'] = eval(r['attachments'])
+                        except:
+                            r['attachments'] = []
+                    
+                    # Garantir campos obrigatórios
+                    if 'id' in r:
+                         tasks.append(Task.from_dict(r))
+                return tasks
+            except Exception as e:
+                # Se falhar conexão ou aba vazia
+                return []
+
+        # --- LOCAL FILES ---
+        user_id = st.session_state.get("current_user", "2949400")
+        
+        # "Gestão" must see ALL tasks from ALL files
+        if user_id in ["GESTAO", "2484901"]:
+            all_tasks = []
+            seen_ids = set()
+            files_to_load = [DATA_FILE]
+            if os.path.exists("."):
+                for f in os.listdir("."):
+                    if f.startswith("flow_data_") and f.endswith(".json"):
+                        files_to_load.append(f)
+            for fpath in files_to_load:
+                if os.path.exists(fpath):
+                    try:
+                        with open(fpath, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                            for item in data:
+                                t = Task.from_dict(item)
+                                if t.id not in seen_ids:
+                                    all_tasks.append(t)
+                                    seen_ids.add(t.id)
+                    except: pass
+            return all_tasks
+
         if not os.path.exists(self.file_path):
             return self._create_initial_data()
         try:
             with open(self.file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            return [Task.from_dict(item) for item in data]
+            tasks = [Task.from_dict(item) for item in data]
+            return tasks
         except Exception as e:
             st.error(f"Erro ao carregar dados: {e}")
             return []
     
     def save_tasks(self, tasks: List[Task]) -> bool:
+        # --- GOOGLE SHEETS ---
+        if self.use_sheets:
+            try:
+                ws = self._get_worksheet("Tasks")
+                data = [t.to_dict() for t in tasks]
+                
+                 # Formatar para Sheet (Listas viram strings)
+                formatted_data = []
+                headers = []
+                if data:
+                    headers = list(data[0].keys())
+                
+                for item in data:
+                    new_item = item.copy()
+                    if 'attachments' in new_item:
+                         new_item['attachments'] = str(new_item['attachments'])
+                    formatted_data.append(new_item)
+
+                ws.clear()
+                if headers:
+                    ws.append_row(headers)
+                    rows = [list(d.values()) for d in formatted_data]
+                    ws.append_rows(rows)
+                return True
+            except Exception as e:
+                st.error(f"Erro ao salvar na nuvem: {e}")
+                return False
+
+        # --- LOCAL ---
         try:
             data = [t.to_dict() for t in tasks]
             with open(self.file_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
             return True
         except Exception as e:
-            st.error(f"Erro ao salvar dados: {e}")
+            st.error(f"Erro ao salvar dados dados: {e}")
             return False
     
     def _create_initial_data(self) -> List[Task]:
+        # Para Maicon (ou fallback)
+        base_id = int(time.time() * 1000)
         initial_tasks = [
-            Task(
-                title="Revisar documentação do programa",
-                responsible="Maicon",
-                category="Bolsas de Estudos",
-                priority="Média",
-                status="Em Andamento",
-                due_date="2026-01-10",
-                description="Atualizar documentação para o semestre 2026/1"
-            ),
-            Task(
-                title="Maria Silva - Dúvida sobre inscrição",
-                responsible="Maicon",
-                category="Pessoas/Atendimentos",
-                priority="Alta",
-                status="Pendente",
-                due_date="2026-01-07",
-                description="Maria precisa de orientação"
-            )
+            Task(title="Exemplo de Tarefa", responsible="Maicon", category="Outros", priority="Média", status="Pendente", due_date=datetime.now().strftime("%Y-%m-%d"), id=base_id)
         ]
         self.save_tasks(initial_tasks)
         return initial_tasks
     
     # ---- Updates ----
     def load_updates(self) -> List[TaskUpdate]:
-        if not os.path.exists(self.updates_path):
-            return []
+        if self.use_sheets:
+            try:
+                ws = self._get_worksheet("Updates")
+                records = ws.get_all_records()
+                # Converter para obj
+                return [TaskUpdate.from_dict(r) for r in records]
+            except:
+                return []
+
+        if not os.path.exists(self.updates_path): return []
         try:
             with open(self.updates_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             return [TaskUpdate.from_dict(item, idx) for idx, item in enumerate(data)]
-        except Exception:
-            return []
+        except: return []
     
     def save_updates(self, updates: List[TaskUpdate]) -> bool:
+        if self.use_sheets:
+            try:
+                ws = self._get_worksheet("Updates")
+                data = [u.to_dict() for u in updates]
+                
+                ws.clear()
+                if data:
+                    ws.append_row(list(data[0].keys()))
+                    rows = [list(d.values()) for d in data]
+                    ws.append_rows(rows)
+                return True
+            except: return False
+
         try:
             data = [u.to_dict() for u in updates]
             with open(self.updates_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
             return True
-        except Exception:
-            return False
+        except: return False
     
     def add_update(self, update: TaskUpdate) -> None:
         updates = self.load_updates()
@@ -261,6 +533,12 @@ class DataManager:
 
 GESTORES_FILE = "gestores.xlsx"
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_gestores_data():
+    if not os.path.exists(GESTORES_FILE):
+        return pd.DataFrame()
+    return pd.read_excel(GESTORES_FILE)
+
 def buscar_colaborador_por_matricula(matricula: str) -> Dict:
     """Busca dados do colaborador no arquivo gestores.xlsx pela matrícula."""
     if not matricula or not matricula.strip():
@@ -270,10 +548,9 @@ def buscar_colaborador_por_matricula(matricula: str) -> Dict:
         # Limpar matrícula
         matricula_clean = str(matricula).strip()
         
-        if not os.path.exists(GESTORES_FILE):
+        df = load_gestores_data()
+        if df.empty:
             return {}
-        
-        df = pd.read_excel(GESTORES_FILE)
         
         # Buscar pela matrícula (pode ser número ou string)
         df['MATRICULA'] = df['MATRICULA'].astype(str).str.strip()
@@ -352,7 +629,7 @@ class NavigationSystem:
         "Quadros": "📋",
         "Calendário": "📅",
         "Kanban": "📝",
-        "Timeline": "⏳",
+        "Requisições": "📑",
         "Follow-Up": "💼",
     }
     
@@ -372,24 +649,49 @@ class NavigationSystem:
         */
         
         /* Estilização Geral de Botões de Nav */
+        /* Estilização Geral de Botões de Nav */
         div.stButton > button {
             border-radius: 12px !important;
             border: 1px solid rgba(255,255,255,0.05) !important;
             background: rgba(255,255,255,0.03) !important;
             transition: all 0.3s ease !important;
             height: 42px !important;
+            padding: 0 2px !important; /* Minimal padding */
+            font-size: 0.8rem !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            width: 100% !important;
+            white-space: nowrap !important;
+            overflow: hidden !important;
         }
+        
+        /* Forçar texto em uma linha e com reticências */
+        div.stButton > button p, div.stButton > button div {
+            white-space: nowrap !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+            font-size: 0.8rem !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            line-height: normal !important;
+            display: inline-block !important;
+            max-width: 100% !important;
+        }
+
         div.stButton > button:hover {
-            background: rgba(255,255,255,0.08) !important;
-            border-color: rgba(99, 102, 241, 0.5) !important;
-            transform: translateY(-2px);
+            background: rgba(255,255,255,0.12) !important;
+            border-color: rgba(99, 102, 241, 0.8) !important;
+            transform: translateY(-2px) !important;
+            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3) !important;
+            z-index: 10 !important;
         }
         
         /* Botão Ativo */
         div.stButton > button[kind="primary"] {
             background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%) !important;
-            box-shadow: 0 4px 15px rgba(99, 102, 241, 0.3) !important;
-            border: none !important;
+            box-shadow: 0 4px 15px rgba(99, 102, 241, 0.5) !important;
+            border: 1px solid rgba(255,255,255,0.1) !important;
         }
 
         /* Inputs (Select e Text) */
@@ -400,52 +702,76 @@ class NavigationSystem:
             border-radius: 12px !important;
             height: 42px !important;
         }
+        
+        div[data-testid="stSelectbox"] > div > div:hover,
+        div[data-testid="stTextInput"] > div > div:hover {
+            border-color: rgba(99, 102, 241, 0.6) !important;
+            box-shadow: 0 0 15px rgba(99, 102, 241, 0.2) !important;
+        }
         </style>
         """, unsafe_allow_html=True)
         
-        cols = st.columns([0.62, 0.13, 0.15, 0.10])
+        # 8. Nova Button (Check for Manager first)
+        current_user = st.session_state.get("current_user", "")
+        is_manager = (current_user == "2484901" or current_user == "GESTAO")
         
-        # 1. Navigation
+        # Adjust layout based on role
+        if is_manager:
+            # 9 slots: 7 Nav + Search + Nova
+            # Reorganize Cols: Navs (7) | Gestão (1) | Search+Nova (Combined or separate?)
+            # Let's use 9 columns
+            # [1, 1, 1, 1, 1, 1, 1.2, 2, 0.8] approx
+            # [1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.4, 2, 1] approx
+             cols = st.columns([1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.4, 2, 1])
+        else:
+             cols = st.columns([1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 2, 0.8])
+        
+        # ... Render standard buttons 0-5 ...
         with cols[0]:
-            nav_cols = st.columns(len(cls.NAV_OPTIONS))
-            for idx, (page, icon) in enumerate(cls.NAV_OPTIONS.items()):
-                with nav_cols[idx]:
-                    active = st.session_state.selected_page == page
-                    if st.button(
-                        f"{icon} {page}",
-                        key=f"nav_{page}",
-                        use_container_width=True,
-                        type="primary" if active else "secondary",
-                    ):
-                        st.session_state.selected_page = page
-                        st.rerun()
-        
-        # 2. Filter
+            if st.button("📊 Painel", key="nav_Painel", use_container_width=True, type="primary" if st.session_state.selected_page == "Painel" else "secondary"):
+                st.session_state.selected_page = "Painel"
+                st.rerun()
         with cols[1]:
-            all_categories = ["Todos"] + [info["name"] for info in CATEGORY_OPTIONS.values()]
-            selected_category = st.selectbox(
-                "Quadro",
-                options=all_categories,
-                index=0,
-                label_visibility="collapsed",
-                key="category_filter",
-            )
-
-        # 3. Search
+            if st.button("📋 Quadros", key="nav_Quadros", use_container_width=True, type="primary" if st.session_state.selected_page == "Quadros" else "secondary"):
+                st.session_state.selected_page = "Quadros"
+                st.rerun()
         with cols[2]:
-            search_query = st.text_input(
-                "Pesquisar",
-                placeholder="🔍 Buscar...",
-                label_visibility="collapsed",
-                key="search_input",
-            )
-        
-        # 4. Nova Button
+            if st.button("📅 Calendário", key="nav_Calendário", use_container_width=True, type="primary" if st.session_state.selected_page == "Calendário" else "secondary"):
+                st.session_state.selected_page = "Calendário"
+                st.rerun()
         with cols[3]:
-            if st.button("➕ Nova", type="primary", use_container_width=True):
-                st.session_state.show_modal = True
+            if st.button("📝 Kanban", key="nav_Kanban", use_container_width=True, type="primary" if st.session_state.selected_page == "Kanban" else "secondary"):
+                st.session_state.selected_page = "Kanban"
+                st.rerun()
+        with cols[4]:
+            if st.button("📑 Requisições", key="nav_Requisições", use_container_width=True, type="primary" if st.session_state.selected_page == "Requisições" else "secondary"):
+                st.session_state.selected_page = "Requisições"
+                st.rerun()
+        with cols[5]:
+            if st.button("💼 Follow-Up", key="nav_Follow-Up", use_container_width=True, type="primary" if st.session_state.selected_page == "Follow-Up" else "secondary"):
+                st.session_state.selected_page = "Follow-Up"
+                st.rerun()
         
-        return search_query, st.session_state.selected_page, selected_category
+        # Manager Tab
+        next_col_idx = 6
+        if is_manager:
+            with cols[6]:
+                if st.button("👩‍💼 Gestão", key="nav_Gestao", use_container_width=True, type="primary" if st.session_state.selected_page == "Gestão" else "secondary"):
+                    st.session_state.selected_page = "Gestão"
+                    st.rerun()
+            next_col_idx = 7
+
+        # Search
+        with cols[next_col_idx]:
+            search_query = st.text_input("Pesquisar", placeholder="🔍 Buscar...", label_visibility="collapsed", key="search_input")
+        
+        # Nova Button
+        with cols[next_col_idx + 1]:
+            if st.button("➕ Nova", type="primary", use_container_width=True, key="btn_nav_new_task"):
+                st.session_state.show_modal = True
+                st.session_state.show_category_modal = False # Evitar conflito
+        
+        return search_query, st.session_state.selected_page
 
 
 class DashboardView:
@@ -512,7 +838,7 @@ class DashboardView:
         
         fig.update_traces(
             textposition="none", 
-            marker=dict(line=dict(color="#0f172a", width=3)),
+            marker=dict(line=dict(color="#0f172a", width=0)),
             hovertemplate="<b>%{label}</b><br>%{value} tarefas<extra></extra>"
         )
         
@@ -608,6 +934,8 @@ class DashboardView:
             showlegend=False
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+
     
     @staticmethod
     def render_timeline_chart(tasks: List[Task]) -> None:
@@ -784,10 +1112,11 @@ class BoardsView:
             }
             
             div[data-testid="stVerticalBlockBorderWrapper"]:hover {
-                transform: translateY(-2px);
-                box-shadow: 0 8px 25px rgba(0,0,0,0.2) !important;
-                border-color: rgba(87, 155, 252, 0.3) !important;
-                background: linear-gradient(160deg, rgba(42, 48, 74, 0.9) 0%, rgba(35, 39, 62, 0.9) 100%) !important;
+                transform: translateY(-4px) scale(1.005);
+                box-shadow: 0 12px 30px rgba(99, 102, 241, 0.25) !important;
+                border-color: rgba(99, 102, 241, 0.6) !important;
+                background: linear-gradient(160deg, rgba(42, 48, 74, 1) 0%, rgba(35, 39, 62, 1) 100%) !important;
+                z-index: 5;
             }
 
             /* Botões de Ação (Ícones) - Estilo Ghost/Minimalista */
@@ -837,10 +1166,14 @@ class BoardsView:
 
             def flush_buffer(buffer, section_name, color):
                 if not buffer: return ""
-                html = f"<div style='font-size:0.75rem;color:{color};font-weight:800;margin-bottom:4px;text-transform:uppercase;'>{section_name}</div>"
+                header = ""
+                if section_name:
+                    header = f"<div style='font-size:0.75rem;color:{color};font-weight:800;margin-bottom:4px;text-transform:uppercase;'>{section_name}</div>"
+                
+                html = header
                 html += "<div style='display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;'>"
                 for item in buffer:
-                    html += f"<span style='background:rgba(255,255,255,0.08);padding:4px 8px;border-radius:4px;font-size:0.75rem;color:#e0e0e0;border:1px solid rgba(255,255,255,0.1);'>{item}</span>"
+                    html += f"<span style='background:rgba(226, 232, 240, 0.1);padding:4px 10px;border-radius:6px;font-size:0.75rem;color:#f8fafc;border:1px solid rgba(255,255,255,0.1);'>{item}</span>"
                 html += "</div>"
                 return html
 
@@ -862,9 +1195,9 @@ class BoardsView:
                     section_buffer.append(cleaned)
             
             final_html += flush_buffer(section_buffer, current_section, info['color'])
-            return f"<div style='background:rgba(255,255,255,0.03); padding:16px; border-radius:12px; margin-bottom:12px; border:1px solid rgba(255,255,255,0.08);'>{final_html}</div>"
+            return f"<div style='background:rgba(148, 163, 184, 0.1); padding:16px; border-radius:12px; margin-bottom:12px; border:1px solid rgba(255,255,255,0.08);'>{final_html}</div>"
         
-        return f"<div style='background:rgba(255,255,255,0.05); padding:12px; border-radius:8px; margin-bottom:12px; border:1px solid rgba(255,255,255,0.1);'><div style=\"color:#c5c7d0;font-size:0.85rem;line-height:1.4;\">{task.description}</div></div>"
+        return f"<div style='background:rgba(148, 163, 184, 0.12); padding:12px; border-radius:8px; margin-bottom:12px; border:1px solid rgba(255,255,255,0.1);'><div style=\"color:#f8fafc;font-size:0.85rem;line-height:1.4;\">{task.description}</div></div>"
 
     @classmethod
     def render(cls, tasks: List[Task]) -> None:
@@ -925,29 +1258,31 @@ class BoardsView:
                 
                 # Container do Card usando o componente nativo do Streamlit para agrupar widgets
                 with st.container(border=True):
-                    # Header do Card (HTML)
+                    # Container Colorido (Tema Suave) - Ajustado para cobrir o topo do card
                     st.markdown(
                         f"""
-                        <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:8px;">
-                            <span style="font-size:2rem;">{info['icon']}</span>
-                            <div style="flex:1;">
-                                <div style="color:{info['color']};font-size:0.75rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:2px;">
-                                    {info['name']}
+                        <div style="background: {info['color']}18; padding: 20px; border-radius: 12px 12px 0 0; margin: -1.05rem -1.05rem 15px -1.05rem; border-bottom: 1px solid {info['color']}22;">
+                            <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:8px;">
+                                <span style="font-size:2rem;">{info['icon']}</span>
+                                <div style="flex:1;">
+                                    <div style="color:{info['color']};font-size:0.75rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:2px;">
+                                        {info['name']}
+                                    </div>
+                                    <div style="color:white;font-size:1.1rem;font-weight:700;line-height:1.2;">{task.title}</div>
                                 </div>
-                                <div style="color:white;font-size:1.1rem;font-weight:700;line-height:1.2;">{task.title}</div>
                             </div>
-                        </div>
                         """,
                         unsafe_allow_html=True
                     )
 
-                    # Descrição (HTML incorporado)
+                    # Descrição (Dentro do box colorido se houver)
                     if task.description:
-                        # [Lógica simplificada para manter o código limpo aqui, ou reutilizar o que já existe]
-                        # Reutilizando a lógica de processamento de descrição que já estava no código
-                        desc_html = cls._process_description(task, info) # Vou criar esse helper
+                        desc_html = cls._process_description(task, info)
                         st.markdown(desc_html, unsafe_allow_html=True)
-                    else:
+                    
+                    st.markdown("</div>", unsafe_allow_html=True)
+                    
+                    if not task.description:
                          st.markdown("<div style='margin-bottom:12px;'></div>", unsafe_allow_html=True)
 
                     # Área Interativa (Widgets Streamlit) - Envolvida em container para escopo CSS
@@ -1166,6 +1501,15 @@ class CalendarView:
         with c2:
             year = st.number_input("Ano", min_value=2020, max_value=2030, value=now.year)
         
+    @classmethod
+    def render(cls, tasks: List[Task]) -> None:
+        now = datetime.now()
+        c1, c2, _ = st.columns([2, 2, 8])
+        with c1:
+            month = st.selectbox("Mês", list(range(1, 13)), index=now.month - 1, format_func=lambda x: MESES_PT[x])
+        with c2:
+            year = st.number_input("Ano", min_value=2020, max_value=2030, value=now.year)
+        
         # Legenda de Prioridade
         st.markdown(
             """
@@ -1217,13 +1561,24 @@ class CalendarView:
                 html += f"<div class='calendar-day {t_class} {hover_class}'>"
                 html += f"<div class='day-number {t_class}'>{day}</div>"
                 
+                # Detectar se é administrador/gestor para exibir o analista
+                current_mat = st.session_state.get("current_user", "2949400")
+                is_admin_mode = current_mat in ["2949400", "2484901", "GESTAO"]
+
                 # Container de tarefas visíveis (primeiras 3)
                 html += "<div class='calendar-tasks-visible'>"
                 for t in day_tasks[:3]:
                     info = t.get_category_info()
                     prio_color = PRIORITY_CONFIG[t.priority]['color']
                     title = t.title[:20] + "..." if len(t.title) > 20 else t.title
-                    html += f"<div class='task-item' style='border-left-color:{prio_color};background:{PRIORITY_CONFIG[t.priority]['bg']};'>{info['icon']} {title}</div>"
+                    
+                    # Badge do Analista (3 Primeiras Letras) para Gestão
+                    ans_badge = ""
+                    if is_admin_mode:
+                        display_name = t.responsible[:3].upper()
+                        ans_badge = f"<span style='background:rgba(255,255,255,0.15);padding:1px 4px;border-radius:3px;margin-right:5px;font-size:0.55rem;font-weight:800;color:#fff;border:1px solid rgba(255,255,255,0.1);'>{display_name}</span>"
+                    
+                    html += f"<div class='task-item' style='border-left-color:{prio_color};background:{PRIORITY_CONFIG[t.priority]['bg']};'>{ans_badge}{info['icon']} {title}</div>"
                 if has_many:
                     html += f"<div class='task-more'>+{len(day_tasks)-3} mais ⤵</div>"
                 html += "</div>"
@@ -1237,9 +1592,13 @@ class CalendarView:
                         prio_color = PRIORITY_CONFIG[t.priority]['color']
                         title = t.title[:35] + "..." if len(t.title) > 35 else t.title
                         status = t.status
+                        
+                        # Label do Analista no Tooltip
+                        ans_label = f"<span style='font-size:0.65rem;color:#94a3b8;margin-right:6px;font-weight:700;'>[{t.responsible.split()[0].upper()}]</span>" if is_admin_mode else ""
+                        
                         html += f"<div class='tooltip-task' style='border-left-color:{prio_color};'>"
                         html += f"<span class='tooltip-icon'>{info['icon']}</span>"
-                        html += f"<span class='tooltip-title'>{title}</span>"
+                        html += f"<span class='tooltip-title'>{ans_label}{title}</span>"
                         html += f"<span class='tooltip-status' style='color:{STATUS_CONFIG[status]['color']};'>{status}</span>"
                         html += "</div>"
                     html += "</div>"
@@ -1312,155 +1671,270 @@ class KanbanView:
                 st.markdown(column_html, unsafe_allow_html=True)
 
 
-class TimelineView:
+
+class RequestsView:
     @staticmethod
-    def _render_smart_description(description: str, primary_color: str) -> str:
-        if not description:
-            return ""
-            
-        def flush_buffer(buffer, section_name, color):
-            if not buffer: return ""
-            html = f"<div style='font-size:0.75rem;color:{color};font-weight:800;margin-bottom:4px;text-transform:uppercase;'>{section_name}</div>"
-            html += "<div style='display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;'>"
-            for item in buffer:
-                html += f"<span style='background:rgba(255,255,255,0.08);padding:4px 8px;border-radius:4px;font-size:0.75rem;color:#e0e0e0;border:1px solid rgba(255,255,255,0.1);'>{item}</span>"
-            html += "</div>"
-            return html
-
-        # Verificação simples para texto estruturado
-        if "DADOS DO COLABORADOR" in description or "DADOS DO ATENDIMENTO" in description:
-            lines = description.split('\n')
-            final_html = ""
-            current_section = None
-            section_buffer = []
-
-            for line in lines:
-                line = line.strip()
-                if not line: continue
-                
-                upper_line = line.upper()
-
-                # Verifica headers PRIMEIRO (mesmo que tenham underscores)
-                if 'DADOS DO ATENDIMENTO' in upper_line:
-                    final_html += flush_buffer(section_buffer, current_section, primary_color)
-                    current_section = "📋 DADOS ATEND."
-                    section_buffer = []
-                    continue
-                elif 'DADOS DO COLABORADOR' in upper_line:
-                    final_html += flush_buffer(section_buffer, current_section, primary_color)
-                    current_section = "👤 DADOS COLAB."
-                    section_buffer = []
-                    continue
-                
-                # Remove linhas que são puramente separadores
-                if set(line).issubset(set('_- ═')):
-                     continue
-                     
-                if line.startswith('📂 Categoria:'):
-                     continue
-                else:
-                    # Limpa caracteres de lista ou separadores no início
-                    cleaned = line.lstrip('_-=═• ').strip()
-                    if cleaned:
-                        section_buffer.append(cleaned)
-            
-            final_html += flush_buffer(section_buffer, current_section, primary_color)
-            return f"<div style='margin-bottom:16px;'>{final_html}</div>"
+    def render(tasks_ignored: List[Task]) -> None:
+        # Nota: ignoramos a lista de tarefas padrão pois usamos a lista de requisições independente
+        user_id = st.session_state.get("current_user", "2949400")
+        is_manager = user_id in ["GESTAO", "2484901", "2949400"]
         
-        else:
-            # Texto simples
-            return f'<div style="color:#c5c7d0;font-size:0.9rem;line-height:1.6;margin-bottom:16px;">{description}</div>'
-
-
-    @classmethod
-    def render(cls, tasks: List[Task]) -> None:
-        if not tasks:
-            st.info("Nenhuma tarefa encontrada.")
-            return
-        
-        # Inicializar estado para histórico expandido
-        if "timeline_expanded_history" not in st.session_state:
-            st.session_state.timeline_expanded_history = set()
-        
+        reqs = st.session_state.get("requests", [])
         dm = DataManager()
         
-        try:
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                cats = sorted(list(set([t.category for t in tasks if t.category])))
-                if not cats: cats = ["Geral"]
-                f_cat = st.multiselect("📂 Tema", cats, default=cats, key="tl_cat")
-            with c2:
-                sts = sorted(list(set([t.status for t in tasks if t.status])))
-                if not sts: sts = list(STATUS_CONFIG.keys())
-                f_st = st.multiselect("🎯 Status", sts, default=sts, key="tl_st")
-            with c3:
-                pr_options = ["Baixa", "Média", "Alta", "Urgente"]
-                f_pr = st.multiselect("⚡ Prioridade", pr_options, default=pr_options, key="tl_pr")
-            st.markdown("<br>", unsafe_allow_html=True)
-            flt = [
-                t for t in tasks 
-                if (not f_cat or t.category in f_cat) 
-                and (not f_st or t.status in f_st) 
-                and (not f_pr or t.priority in f_pr)
-            ]
-        except Exception as e:
-            st.error(f"Erro nos filtros: {e}")
-            flt = []
-        if not flt:
-            st.warning("Nenhuma tarefa com os filtros.")
-            return
-        # Ordenação segura
-        def safe_date_sort(t):
-            try:
-                return t.due_date
-            except:
-                return "9999-12-31"
+        # Título Dinâmico
+        header_title = "📑 Minhas Requisições (RC/PO)" if not is_manager else "📑 Gestão Global de Requisições (RC/PO)"
         
-        ordered = sorted(flt, key=safe_date_sort)
-        
-        st.markdown(f"### ⏳ Timeline ({len(ordered)} atividades)")
-        st.markdown("<br>", unsafe_allow_html=True)
-        
-        for t in ordered:
-            info = t.get_category_info()
-            s_info = STATUS_CONFIG.get(t.status, {'color': '#999', 'bg': '#333', 'text': '#fff'})
-            
-            try:
-                due = datetime.strptime(t.due_date, "%Y-%m-%d").strftime("%d/%m/%Y")
-            except:
-                due = t.due_date
-            
-            st.markdown(
-                f"""
-                <div style='display:flex; gap:20px; margin-bottom:10px;'>
-                    <div style='display:flex; flex-direction:column; align-items:center; width:20px;'>
-                        <div style='width:12px; height:12px; background:#579bfc; border-radius:50%; box-shadow:0 0 10px #579bfc80; z-index:2;'></div>
-                        <div style='width:2px; flex:1; background:rgba(255,255,255,0.1); margin-top:5px;'></div>
-                    </div>
-                    <div style='flex:1; background:linear-gradient(135deg, {info['bg']}40 0%, rgba(255,255,255,0.05) 100%); 
-                                border:1px solid rgba(255,255,255,0.08); border-left:4px solid {info['color']}; 
-                                border-radius:12px; padding:18px; box-shadow:0 10px 30px rgba(0,0,0,0.2);'>
-                        <div style='display:flex; justify-content:space-between; margin-bottom:10px;'>
-                            <span style='color:{info['color']}; font-weight:800; font-size:0.75rem; text-transform:uppercase;'>{info['name']}</span>
-                            <span style='color:#9699a6; font-size:0.8rem; font-weight:600;'>📅 {due}</span>
-                        </div>
-                        <h4 style='color:white; margin:0 0 12px 0; font-size:1.1rem; letter-spacing:-0.5px;'>{t.title}</h4>
-                        {cls._render_smart_description(t.description, info['color'])}
-                        <div style='display:flex; gap:10px; align-items:center; margin-top:10px;'>
-                            <div style='background:rgba(255,255,255,0.05); padding:4px 10px; border-radius:6px; font-size:0.75rem; color:white;'>
-                                👤 {t.responsible}
-                            </div>
-                            <div style='background:{s_info['bg']}; color:{s_info['text']}; padding:4px 10px; border-radius:6px; font-size:0.75rem; font-weight:700;'>
-                                {t.status}
-                            </div>
-                        </div>
-                    </div>
+        st.markdown(
+            f"""
+            <div style="background: rgba(99, 102, 241, 0.1); border-left: 5px solid #6366f1; border-radius: 8px; padding: 20px; margin-bottom: 25px; display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <h2 style="margin: 0; color: #f8fafc; font-weight: 800;">{header_title}</h2>
+                    <p style="margin: 5px 0 0 0; color: #94a3b8; font-size: 0.95rem;">
+                        {"Controle individual de suas compras." if not is_manager else "Visão consolidada de todos os analistas."}
+                    </p>
                 </div>
-                """,
-                unsafe_allow_html=True
+            </div>
+            """, unsafe_allow_html=True
+        )
+
+        # Filtro de Analista (Apenas para Gestão)
+        filtered_reqs = reqs
+        if is_manager:
+            all_analysts = sorted(list(set([r.buyer if r.buyer else "Não definido" for r in reqs])))
+            selected_analyst = st.multiselect("🔍 Filtrar por Analista", all_analysts, default=all_analysts, key="mgr_filter_analyst")
+            filtered_reqs = [r for r in reqs if (r.buyer if r.buyer else "Não definido") in selected_analyst]
+            st.markdown("---")
+
+        # Barra de Ações do Topo (Exportar)
+        if filtered_reqs:
+            import io
+            df_exp = pd.DataFrame([asdict(r) for r in filtered_reqs])
+            # Ordenar e renomear
+            cols_to_exp = ['subelement', 'date_opening', 'description', 'rc_code', 'buyer', 'situation', 'po_number', 'nf_tracking']
+            df_exp = df_exp[cols_to_exp]
+            df_exp.columns = ['Subelemento', 'Data Abertura', 'Descrição', 'Código RC', 'Comprador', 'Situação', 'Nº Pedido', 'Status NF']
+            
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df_exp.to_excel(writer, index=False, sheet_name='Requisições')
+            
+            st.download_button(
+                label="📥 Exportar Visão Atual para Excel",
+                data=output.getvalue(),
+                file_name=f"requisicoes_{user_id}_{datetime.now().strftime('%d_%m_%Y')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
-            st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
+            st.markdown("<div style='height:20px;'></div>", unsafe_allow_html=True)
+
+        # CSS para a Tabela Monday Style
+        st.markdown("""
+            <style>
+            .req-table-header {
+                display: flex;
+                background: rgba(15, 23, 42, 0.6);
+                padding: 10px 15px;
+                border-radius: 8px 8px 0 0;
+                font-size: 0.75rem;
+                font-weight: 700;
+                color: #94a3b8;
+                text-transform: uppercase;
+                border: 1px solid rgba(255,255,255,0.05);
+                margin-bottom: 5px;
+            }
+            .req-row {
+                background: rgba(255, 255, 255, 0.02);
+                padding: 5px 10px;
+                border: 1px solid rgba(255,255,255,0.05);
+                margin-bottom: 2px;
+                transition: all 0.2s ease;
+            }
+            .req-row:hover {
+                background: rgba(255, 255, 255, 0.05);
+                border-color: rgba(99, 102, 241, 0.3);
+            }
+            .add-btn {
+                color: #6366f1;
+                cursor: pointer;
+                font-size: 0.85rem;
+                font-weight: 600;
+                padding: 10px;
+                display: flex;
+                align-items: center;
+                gap: 5px;
+            }
+            </style>
+        """, unsafe_allow_html=True)
+
+        # Definição de Colunas Refinada
+        # [Subelemento, Data, Descrição, Cód RC, Comprador, Situação, Anexos, PO, NF Track, NF Anx, Ações]
+        cols_spec = [1.3, 0.9, 1.8, 1.0, 1.0, 1.3, 0.6, 1.0, 1.4, 0.6, 0.8]
+        
+        # Header
+        h_cols = st.columns(cols_spec)
+        headers = ["Subelemento", "Data RC", "Descrição", "Código-RC", "Comprador", "Situação", "Anx", "Nº Pedido", "NF Acomp.", "NF", "Ações"]
+        for col, head in zip(h_cols, headers):
+            col.markdown(f"<div style='font-size:0.65rem; color:#64748b; text-transform:uppercase; font-weight:800; letter-spacing:0.5px;'>{head}</div>", unsafe_allow_html=True)
+
+        st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+
+        # Listagem de Requisições
+        for i, r in enumerate(filtered_reqs):
+            with st.container():
+                r_cols = st.columns(cols_spec)
+                
+                # Subelemento
+                new_sub = r_cols[0].text_input("Sub", value=r.subelement, key=f"req_sub_{r.id}", label_visibility="collapsed")
+                if new_sub != r.subelement:
+                    r.subelement = new_sub
+                    dm.save_requests(reqs)
+
+                # Data RC
+                try:
+                    d_val = datetime.strptime(r.date_opening, "%Y-%m-%d")
+                except: d_val = datetime.now()
+                new_date = r_cols[1].date_input("Data", value=d_val, key=f"req_date_{r.id}", label_visibility="collapsed")
+                if new_date.strftime("%Y-%m-%d") != r.date_opening:
+                    r.date_opening = new_date.strftime("%Y-%m-%d")
+                    dm.save_requests(reqs)
+
+                # Descrição
+                new_desc = r_cols[2].text_input("Desc", value=r.description, key=f"req_desc_{r.id}", label_visibility="collapsed")
+                if new_desc != r.description:
+                    r.description = new_desc
+                    dm.save_requests(reqs)
+
+                # Código RC
+                new_rc = r_cols[3].text_input("RC", value=r.rc_code, key=f"req_rc_{r.id}", label_visibility="collapsed")
+                if new_rc != r.rc_code:
+                    r.rc_code = new_rc
+                    dm.save_requests(reqs)
+
+                # Comprador
+                # Buscar analistas disponíveis ou permitir texto
+                ans = sorted(list(set([t.responsible for t in st.session_state.get("tasks", []) if t.responsible])))
+                try:
+                    def_idx = ans.index(r.buyer) + 1 if r.buyer in ans else 0
+                except: def_idx = 0
+                
+                new_buyer = r_cols[4].selectbox("Comp", ["-"] + ans, index=def_idx, key=f"req_buy_{r.id}", label_visibility="collapsed")
+                if new_buyer != r.buyer:
+                    r.buyer = new_buyer if new_buyer != "-" else ""
+                    dm.save_requests(reqs)
+
+                # Situação RC
+                situations = ["Pendente", "Em andamento", "Para revisão", "Concluído"]
+                try:
+                    s_idx = situations.index(r.situation)
+                except: s_idx = 0
+                new_sit = r_cols[5].selectbox("Sit", situations, index=s_idx, key=f"req_sit_{r.id}", label_visibility="collapsed")
+                if new_sit != r.situation:
+                    r.situation = new_sit
+                    dm.save_requests(reqs)
+
+                # Anexos RC (POPOVER PARA UPLOAD)
+                with r_cols[6]:
+                    with st.popover("📎" if r.attachments else "➕", use_container_width=True):
+                        st.markdown("**Anexos da RC**")
+                        if r.attachments:
+                            for file_path in r.attachments:
+                                fn = os.path.basename(file_path)
+                                st.markdown(f"✅ {fn}")
+                        
+                        uploaded = st.file_uploader("Upload", key=f"up_rc_{r.id}", label_visibility="collapsed")
+                        if uploaded:
+                            # Salvar arquivo
+                            save_dir = "attachments/requests"
+                            os.makedirs(save_dir, exist_ok=True)
+                            f_path = os.path.join(save_dir, f"{r.id}_{uploaded.name}")
+                            with open(f_path, "wb") as f:
+                                f.write(uploaded.getbuffer())
+                            r.attachments.append(f_path)
+                            dm.save_requests(reqs)
+                            st.rerun()
+
+                # Número Pedido
+                new_po = r_cols[7].text_input("PO", value=r.po_number, key=f"req_po_{r.id}", label_visibility="collapsed")
+                if new_po != r.po_number:
+                    r.po_number = new_po
+                    dm.save_requests(reqs)
+
+                # NF Acompanhamento
+                nf_opts = ["Aguardando recebimento", "Recebido - Pago", "Pendente Fiscal", "Cancelado"]
+                try:
+                    n_idx = nf_opts.index(r.nf_tracking)
+                except: n_idx = 0
+                new_nf_t = r_cols[8].selectbox("NFT", nf_opts, index=n_idx, key=f"req_nft_{r.id}", label_visibility="collapsed")
+                if new_nf_t != r.nf_tracking:
+                    r.nf_tracking = new_nf_t
+                    dm.save_requests(reqs)
+
+                # NF Anexo (POPOVER PARA UPLOAD)
+                with r_cols[9]:
+                    with st.popover("📄" if r.nf_attachments else "➕", use_container_width=True):
+                        st.markdown("**Anexos de NF**")
+                        if r.nf_attachments:
+                            for file_path in r.nf_attachments:
+                                fn = os.path.basename(file_path)
+                                st.markdown(f"✅ {fn}")
+                        
+                        uploaded_nf = st.file_uploader("Upload NF", key=f"up_nf_{r.id}", label_visibility="collapsed")
+                        if uploaded_nf:
+                            save_dir = "attachments/nf"
+                            os.makedirs(save_dir, exist_ok=True)
+                            f_path = os.path.join(save_dir, f"{r.id}_{uploaded_nf.name}")
+                            with open(f_path, "wb") as f:
+                                f.write(uploaded_nf.getbuffer())
+                            r.nf_attachments.append(f_path)
+                            dm.save_requests(reqs)
+                            st.rerun()
+
+                # Ações
+                act_cols = r_cols[10].columns(2)
+                # Botão Editar (Abre um expander ou modal rápido)
+                if act_cols[0].button("✏️", key=f"req_ed_btn_{r.id}", help="Editar detalhes"):
+                    st.session_state[f"editing_req_{r.id}"] = not st.session_state.get(f"editing_req_{r.id}", False)
+
+                if act_cols[1].button("🗑️", key=f"req_del_btn_{r.id}", help="Excluir"):
+                    st.session_state.requests.pop(i)
+                    dm.save_requests(st.session_state.requests)
+                    st.rerun()
+            
+            # Formulário de edição expandido se ativo
+            if st.session_state.get(f"editing_req_{r.id}"):
+                with st.form(f"form_edit_req_{r.id}"):
+                    st.markdown(f"### ✏️ Editar Detalhes - {r.subelement}")
+                    e_sub = st.text_input("Subelemento", value=r.subelement)
+                    e_desc = st.text_area("Descrição Detalhada", value=r.description)
+                    e_rc = st.text_input("Código RC", value=r.rc_code)
+                    e_po = st.text_input("Número do Pedido", value=r.po_number)
+                    
+                    if st.form_submit_button("💾 Salvar Tudo"):
+                        r.subelement = e_sub
+                        r.description = e_desc
+                        r.rc_code = e_rc
+                        r.po_number = e_po
+                        dm.save_requests(reqs)
+                        st.session_state[f"editing_req_{r.id}"] = False
+                        st.rerun()
+
+        # Botão + Adicionar subelemento (Estilo Linha Final)
+        st.markdown("<div style='height:5px;'></div>", unsafe_allow_html=True)
+        if st.button("➕ Adicionar nova requisição", use_container_width=True, type="secondary"):
+            user_name = st.session_state.get("user_name", "Analista")
+            new_req = RequestRC(subelement="RC", description="", rc_code="", buyer=user_name, situation="Pendente")
+            st.session_state.requests.append(new_req)
+            dm.save_requests(st.session_state.requests)
+            st.rerun()
+
+        st.markdown(
+            """
+            <div style="margin-top: 30px; font-size: 0.8rem; color: #64748b;">
+                💡 <b>Dica:</b> As alterações são salvas automaticamente ao mudar de campo ou selecionar uma opção.
+            </div>
+            """, unsafe_allow_html=True
+        )
+
 
 # ==========================================
 # FOLLOW-UP SEMANAL
@@ -1779,8 +2253,29 @@ class NewTaskModal:
             return
         
         with st.expander("✨ Lançar Nova Atividade", expanded=True):
-            # Filtrar opções - remover Pessoas/Atendimentos do seletor normal (terá opção separada)
-            options = [k for k in CATEGORY_OPTIONS.keys() if CATEGORY_OPTIONS[k]["name"] != "Pessoas/Atendimentos"]
+            # Compatibilidade com dados dinâmicos
+            CATEGORY_OPTIONS = st.session_state.get("categories", DEFAULT_CATEGORY_OPTIONS)
+            
+            # Filtragem de segurança de categorias (Privacidade)
+            current_mat = st.session_state.get("current_user", "")
+            is_admin_manager = current_mat in ["2949400", "2484901", "GESTAO"]
+            
+            allowed_keys = []
+            for k, val in CATEGORY_OPTIONS.items():
+                if val["name"] == "Pessoas/Atendimentos": 
+                    continue
+                
+                owner = val.get("owner")
+                # Mostrar se: Admin OU Dono é o usuário atual
+                # Legacy (owner is None) só aparece para Admins ou se for Maicon
+                if is_admin_manager:
+                    allowed_keys.append(k)
+                elif owner == current_mat:
+                    allowed_keys.append(k)
+                elif owner is None and current_mat == "2949400": # Maicon vê legacy
+                    allowed_keys.append(k)
+            
+            options = allowed_keys
             
             # Adicionar opção de "Atendimento" separadamente
             tipo_atividade = st.radio(
@@ -1793,7 +2288,15 @@ class NewTaskModal:
             is_atendimento = tipo_atividade == "👥 Atendimento de Pessoa"
             
             if not is_atendimento:
-                sel = st.selectbox("📂 Tema / Quadro", options, key="new_task_category")
+                c_cat, c_btn = st.columns([0.88, 0.12])
+                with c_cat:
+                    sel = st.selectbox("📂 Tema / Quadro", options, key="new_task_category")
+                with c_btn:
+                    st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
+                    if st.button("➕", help="Gerenciar Categorias", key="btn_new_cat_modal", use_container_width=True):
+                        st.session_state.show_category_modal = True
+                        st.rerun()
+                
                 cat_name = CATEGORY_OPTIONS[sel]["name"]
             else:
                 cat_name = "Pessoas/Atendimentos"
@@ -2001,9 +2504,17 @@ class NewTaskModal:
                                 info_extra = "\n".join(info_lines)
                                 desc_final = f"{desc_final}\n\n{info_extra}" if desc_final else info_extra
                             
+                            # Obter nome do responsável atual
+                            try:
+                                curr_mat = st.session_state.get("current_user", "")
+                                curr_d = buscar_colaborador_por_matricula(curr_mat)
+                                responsible_name = curr_d.get("nome", "Usuário").split()[0]
+                            except:
+                                responsible_name = "Usuário"
+
                             t = Task(
                                 title=final_title,
-                                responsible="Maicon",
+                                responsible=responsible_name,
                                 category=cat_name,
                                 priority=priority,
                                 status="Pendente",
@@ -2109,7 +2620,7 @@ def load_custom_css() -> None:
             margin-top: 5px;
         }
 
-        /* KPI CARDS - COMPACT DESIGN */
+        /* KPI CARDS - ENHANCED HOVER */
         .kpi-card {
             background: var(--bg-card);
             backdrop-filter: blur(8px);
@@ -2118,47 +2629,101 @@ def load_custom_css() -> None:
             padding: 1rem;
             display: flex;
             align-items: center;
-            gap: 10px;
-            transition: all 0.3s ease;
+            gap: 15px;
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
             height: 110px;
             width: 100%;
+            position: relative;
+            overflow: hidden;
         }
-        .kpi-card:hover { transform: translateY(-3px); border-color: var(--accent-primary); }
+        .kpi-card:hover { 
+            transform: translateY(-8px) scale(1.02); 
+            border-color: var(--accent-primary); 
+            box-shadow: 0 15px 35px rgba(99, 102, 241, 0.3);
+            background: rgba(30, 41, 59, 1);
+        }
+        .kpi-card::after {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.05), transparent);
+            transition: 0.5s;
+        }
+        .kpi-card:hover::after {
+            left: 100%;
+        }
+
         .kpi-icon-container {
-            width: 40px;
-            height: 40px;
-            border-radius: 10px;
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
             display: flex;
             align-items: center;
             justify-content: center;
             flex-shrink: 0;
+            transition: all 0.3s ease;
         }
-        .kpi-icon { font-size: 1.2rem; }
-        .kpi-label { font-size: 0.65rem; color: var(--text-dim); font-weight: 700; text-transform: uppercase; margin-bottom: 2px; }
-        .kpi-value { font-size: 1.4rem; font-weight: 800; color: var(--text-main); line-height: 1; }
-        .kpi-glow { display: none; }
+        .kpi-card:hover .kpi-icon-container {
+            transform: rotate(10deg);
+        }
 
+        /* METRIC CARDS (Standard Streamlit) */
+        div[data-testid="stMetric"] {
+            background: rgba(30, 41, 59, 0.4);
+            border: 1px solid var(--border-subtle);
+            border-radius: 16px;
+            padding: 15px !important;
+            transition: all 0.3s ease;
+        }
+        div[data-testid="stMetric"]:hover {
+            background: rgba(30, 41, 59, 0.8);
+            border-color: var(--accent-primary);
+            transform: translateY(-5px);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+        }
+
+        /* BUTTONS ENHANCED */
+        div.stButton > button {
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) !important;
+        }
+        div.stButton > button:hover {
+            transform: scale(1.05) translateY(-2px) !important;
+        }
+
+        /* CHARTS CONTAINER */
         .chart-container {
             background: var(--bg-card);
             backdrop-filter: blur(12px);
             border: 1px solid var(--border-subtle);
             border-radius: 20px;
             padding: 1.5rem;
+            transition: all 0.3s ease;
             margin-bottom: 24px;
-            display: flex;
-            flex-direction: column;
-            justify-content: flex-start;
-            overflow: visible;
+        }
+        .chart-container:hover {
+            border-color: rgba(99, 102, 241, 0.4);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            background: rgba(30, 41, 59, 0.85);
         }
 
-        /* Container de Borda Nativo do Streamlit */
+        /* TASK CARDS (Boards/Monday View) */
         div[data-testid="stVerticalBlockBorderWrapper"] {
-            background: var(--bg-card) !important;
+            background: rgba(148, 163, 184, 0.08) !important;
             backdrop-filter: blur(12px) !important;
-            border: 1px solid var(--border-subtle) !important;
+            border: 1px solid rgba(255, 255, 255, 0.08) !important;
             border-radius: 20px !important;
             padding: 1.5rem !important;
             margin-bottom: 1.5rem !important;
+            transition: all 0.3s ease !important;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:hover {
+            background: rgba(148, 163, 184, 0.15) !important;
+            border-color: rgba(99, 102, 241, 0.4) !important;
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3) !important;
         }
         .h-row1 { height: 420px; }
         .h-row2 { height: 320px; }
@@ -2185,6 +2750,13 @@ def load_custom_css() -> None:
             display: flex;
             justify-content: space-between;
             align-items: center;
+            transition: all 0.3s ease;
+        }
+        .monday-group-header:hover {
+            background: rgba(30, 41, 59, 0.8);
+            border-color: rgba(255,255,255,0.15);
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
         }
         
         .task-card-interactive {
@@ -2195,6 +2767,19 @@ def load_custom_css() -> None:
         .task-card-interactive:hover {
             transform: translateX(8px);
             background: var(--bg-card) !important;
+        }
+
+        /* KANBAN CARD HOVER */
+        .kanban-card-hover {
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+            cursor: pointer;
+        }
+        .kanban-card-hover:hover {
+            transform: translateY(-5px) scale(1.02);
+            border-color: rgba(99, 102, 241, 0.4) !important;
+            box-shadow: 0 12px 25px rgba(0,0,0,0.4) !important;
+            background: rgba(45, 55, 72, 0.5) !important;
+            filter: brightness(1.1);
         }
 
         /* SCROLLBAR */
@@ -2218,8 +2803,10 @@ def load_custom_css() -> None:
             position: relative;
         }
         .calendar-day:hover { 
-            background: rgba(30, 41, 59, 0.8);
+            background: rgba(30, 41, 59, 0.95);
             border-color: var(--accent-primary); 
+            transform: scale(1.03);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.4);
             z-index: 100;
         }
         .calendar-day.today { border-color: var(--accent-primary); background: rgba(99, 102, 241, 0.1); }
@@ -2233,11 +2820,18 @@ def load_custom_css() -> None:
             border-radius: 6px; 
             color: var(--text-main); 
             border-left: 3px solid transparent; 
-            transition: all 0.2s ease;
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
             font-weight: 500;
+            cursor: pointer;
+        }
+        .task-item:hover {
+            transform: scale(1.05) translateX(2px);
+            filter: brightness(1.2);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            z-index: 10;
         }
         .task-more {
             font-size: 0.65rem;
@@ -2248,6 +2842,11 @@ def load_custom_css() -> None:
             padding: 4px;
             background: rgba(99, 102, 241, 0.1);
             border-radius: 4px;
+            transition: all 0.2s ease;
+        }
+        .task-more:hover {
+            background: rgba(99, 102, 241, 0.2);
+            transform: translateY(2px);
         }
 
         /* TOOLTIP PREMIUM - Corrigido Posicionamento */
@@ -2324,7 +2923,12 @@ def load_custom_css() -> None:
             position: relative;
             cursor: pointer;
         }
-        .kanban-card:hover { transform: translateY(-3px); border-color: var(--accent-primary); box-shadow: 0 10px 20px rgba(0,0,0,0.3); }
+        .kanban-card:hover { 
+            transform: translateY(-5px); 
+            border-color: var(--accent-primary); 
+            box-shadow: 0 12px 30px rgba(99, 102, 241, 0.25);
+            z-index: 10;
+        }
         .kanban-card-title { font-size: 0.9rem; font-weight: 700; color: var(--text-main); margin-bottom: 10px; line-height: 1.3; }
         .kanban-card-meta { display: flex; align-items: center; gap: 10px; font-size: 0.75rem; color: var(--text-dim); }
         .kanban-priority-badge { font-size: 0.65rem; font-weight: 800; padding: 2px 8px; border-radius: 4px; text-transform: uppercase; }
@@ -2334,17 +2938,312 @@ def load_custom_css() -> None:
     )
 
 # ==========================================
+# LOGIN PAGE
+# ==========================================
+
+def login_page():
+    # Layout de Login Centralizado
+    c1, c2, c3 = st.columns([1, 2, 1])
+    
+    with c2:
+        st.markdown("<br>" * 5, unsafe_allow_html=True)  # Espaçamento vertical
+        with st.container(border=True):
+            st.markdown(
+                """
+                <div style='text-align: center; margin-bottom: 20px;'>
+                    <h1 style='font-size: 2rem; margin-bottom: 0;'>🔐</h1>
+                    <h2 style='color: #f8fafc; margin-top: 10px;'>Acesso Restrito</h2>
+                    <p style='color: #94a3b8; font-size: 0.9rem;'>Área exclusiva para Gestão</p>
+                </div>
+                """, 
+                unsafe_allow_html=True
+            )
+            
+            with st.form("login_form", border=False):
+                matricula = st.text_input("Matrícula", placeholder="Digite sua matrícula")
+                senha = st.text_input("Senha", type="password", placeholder="Digite sua senha")
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                
+                if st.form_submit_button("ACESSAR SISTEMA", type="primary", use_container_width=True):
+                    # Lista de usuários autorizados
+                    CREDENTIALS = {
+                        "2949400": "Cocal@2025",
+                        "2858700": "Cocal@2025",
+                        "2484901": "gestao@2025"
+                    }
+                    
+                    mat = matricula.strip()
+                    is_manager_direct = (mat.lower() == "gestao" and senha == "gestao")
+                    
+                    if is_manager_direct or (mat in CREDENTIALS and senha == CREDENTIALS[mat]):
+                        st.session_state.authenticated = True
+                        st.session_state.current_user = "GESTAO" if is_manager_direct else mat
+                        
+                        # Garantir recarregamento total dos dados (Zerar Session State anterior)
+                        for key in ["tasks", "categories", "selected_tasks", "colaborador_dados"]:
+                            if key in st.session_state:
+                                del st.session_state[key]
+                            
+                        st.toast("Login realizado com sucesso!", icon="✅")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error("Acesso negado. Credenciais inválidas.")
+
+# ==========================================
 # APP
 # ==========================================
+
+# Helper para Dialog (Compatibilidade)
+if hasattr(st, "dialog"):
+    dialog_decorator = st.dialog
+elif hasattr(st, "experimental_dialog"):
+    dialog_decorator = st.experimental_dialog
+else:
+    # Fallback to expander if really old
+    def dialog_decorator(title):
+        def decorator(func):
+            def wrapper(*args, **kwargs):
+                with st.expander(title, expanded=True):
+                    func(*args, **kwargs)
+            return wrapper
+        return decorator
+
+@dialog_decorator("⚙️ Gerenciar Categorias")
+def manage_categories_dialog():
+    st.markdown("Adicione novas categorias ou exclua as existentes.")
+    
+    cats = st.session_state.categories
+    current_user = st.session_state.get("current_user", "")
+    # Maicon (2949400) e Gestora (2484901) são Admins
+    is_admin = (current_user in ["2949400", "2484901"])
+    
+    # Add New
+    with st.container(border=True):
+        st.markdown("###### Nova Categoria")
+        c1, c2, c3 = st.columns([0.15, 0.65, 0.2])
+        with c1:
+            new_icon = st.text_input("Ícone", value="📌", key="new_cat_icon")
+        with c2:
+            new_name = st.text_input("Nome", placeholder="Ex: Financeiro", key="new_cat_name", label_visibility="collapsed")
+        with c3:
+            if st.button("➕ Add", use_container_width=True):
+                if new_name:
+                    key = f"{new_icon} {new_name}"
+                    if key not in cats:
+                        import random
+                        colors = ['#ef4444', '#f97316', '#f59e0b', '#10b981', '#06b6d4', '#3b82f6', '#8b5cf6', '#d946ef', '#ec4899']
+                        color = random.choice(colors)
+                        cats[key] = {
+                            "color": color,
+                            "icon": new_icon,
+                            "name": new_name,
+                            "bg": color + "22",
+                            "owner": current_user # Salvar o dono
+                        }
+                        DataManager().save_categories(cats)
+                        st.session_state.categories = cats
+                        st.success("OK")
+                        time.sleep(0.5)
+                        st.rerun()
+
+    st.markdown("###### Categorias Existentes")
+    
+    # List and Delete
+    for key, val in list(cats.items()):
+        c1, c2 = st.columns([0.85, 0.15])
+        with c1:
+            st.markdown(f"<div style='background:{val.get('bg', '#333')}; padding: 8px; border-radius: 8px; border-left: 4px solid {val['color']}'>{val['icon']} {val['name']}</div>", unsafe_allow_html=True)
+        with c2:
+            # Verificar Permissão
+            cat_owner = val.get("owner")
+            # Pode excluir se for Admin OU se for o Dono
+            can_delete = is_admin or (cat_owner == current_user)
+            
+            if can_delete:
+                if st.button("🗑️", key=f"del_{key}"): 
+                    del cats[key]
+                    DataManager().save_categories(cats)
+                    st.session_state.categories = cats
+                    st.rerun()
+            else:
+                st.button("🔒", disabled=True, key=f"lock_{key}", help="Somente o criador ou gestor pode excluir.")
+                
+    if st.button("Fechar", type="secondary", use_container_width=True):
+        st.session_state.show_category_modal = False
+        st.session_state.show_modal = False # Garantia
+        st.rerun()
+
+class CategoryManagerModal:
+    @staticmethod
+    def render():
+        if st.session_state.get("show_category_modal"):
+            manage_categories_dialog()
+
+
+class ManagerDashboardView:
+
+    @staticmethod
+    def render(tasks: List[Task]) -> None:
+        # Estilo do Container de Título
+        st.markdown(
+            """
+            <div style="background: rgba(99, 102, 241, 0.1); border-left: 5px solid #6366f1; border-radius: 8px; padding: 20px; margin-bottom: 25px;">
+                <h2 style="margin: 0; color: #f8fafc; font-weight: 800;">👩‍💼 Dashboard de Gestão Estratégica</h2>
+                <p style="margin: 5px 0 0 0; color: #94a3b8; font-size: 0.95rem;">Acompanhamento em tempo real da produtividade e prazos da equipe.</p>
+            </div>
+            """, unsafe_allow_html=True
+        )
+
+        # 1. Filtros Avançados (Conforme Ideia do Usuário)
+        analysts = sorted(list(set([t.responsible for t in tasks if t.responsible])))
+        
+        with st.container(border=True):
+            st.markdown("###### 🔍 Refinar Busca Estratégica")
+            
+            # 1. Analistas no Topo para Cascata
+            sel_analysts = st.multiselect("👥 Analistas da Equipe", analysts, default=[], key="gest_ms_analysts")
+            
+            # Base de dados para os próximos filtros
+            if sel_analysts:
+                sub_tasks = [t for t in tasks if t.responsible in sel_analysts]
+            else:
+                sub_tasks = tasks
+
+            # 2. Filtros Dependentes
+            # Tema (Multiselect Largo)
+            all_categories = sorted(list(set([t.category for t in sub_tasks if t.category])))
+            sel_categories = st.multiselect("📂 Tema", all_categories, default=[], key="gest_ms_category", help="Selecione um ou mais temas")
+            
+            c_f1, c_f2 = st.columns(2)
+            with c_f1:
+                all_statuses = sorted(list(set([t.status for t in sub_tasks if t.status])))
+                sel_statuses = st.multiselect("🎯 Status", all_statuses, default=[], key="gest_ms_status")
+            with c_f2:
+                all_priorities = sorted(list(set([t.priority for t in sub_tasks if t.priority])))
+                sel_priorities = st.multiselect("⚡ Prioridade", all_priorities, default=[], key="gest_ms_priority")\
+
+        # 2. Lógica de Filtragem (Combinada)
+        view_tasks = tasks
+        if sel_categories:
+            view_tasks = [t for t in view_tasks if t.category in sel_categories]
+        if sel_statuses:
+            view_tasks = [t for t in view_tasks if t.status in sel_statuses]
+        if sel_priorities:
+            view_tasks = [t for t in view_tasks if t.priority in sel_priorities]
+        if sel_analysts:
+            view_tasks = [t for t in view_tasks if t.responsible in sel_analysts]
+        
+        # Adicional: Filtro do Header também se aplica?
+        # Sim, ele já filtra 'all_tasks' antes de chegar aqui. 
+        # Então se o Header filtrar por 'Analista X', 'view_tasks' aqui já terá apenas 'Analista X'.
+
+        # 3. Métricas Rápidas
+        stats = DashboardView.calculate_stats(view_tasks)
+        efficiency = int((stats["completed"] / stats["total"] * 100) if stats["total"] > 0 else 0)
+        
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Total na Visão", stats["total"])
+        m2.metric("Concluídas", stats["completed"], delta=f"{efficiency}%" if stats['total'] > 0 else None)
+        m3.metric("Em Aberto", stats["in_progress"] + stats["urgent"])
+        m4.metric("Atrasadas", stats["overdue"], delta_color="inverse")
+        m5.metric("Eficiência", f"{efficiency}%")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # 4. Abas de Organização
+        t_dash, t_equipe, t_lista = st.tabs(["📉 Visão de Performance", "👥 Resumo por Analista", "📋 Relatório de Registros"])
+
+        with t_dash:
+            if not view_tasks:
+                st.warning("Sem dados para exibir gráficos.")
+            else:
+                c1, c2 = st.columns(2)
+                df_chart = pd.DataFrame([t.__dict__ for t in view_tasks])
+                with c1:
+                    st.markdown("###### Status das Demandas")
+                    DashboardView.render_status_chart(df_chart)
+                with c2:
+                    st.markdown("###### Distribuição de Prioridades")
+                    DashboardView.render_priority_chart(df_chart)
+
+        with t_equipe:
+            st.markdown("##### 🏆 Ranking de Produtividade")
+            # Criar tabela resumo por analista
+            resumo_data = []
+            for a in analysts:
+                a_list = [t for t in tasks if t.responsible == a]
+                s = DashboardView.calculate_stats(a_list)
+                eff = int((s["completed"] / s["total"] * 100) if s["total"] > 0 else 0)
+                resumo_data.append({
+                    "Analista": a,
+                    "Total": s["total"],
+                    "Concluídas": s["completed"],
+                    "Pendentes": s["in_progress"] + s["urgent"],
+                    "Atrasadas": s["overdue"],
+                    "Eficiência": eff
+                })
+            
+            df_res = pd.DataFrame(resumo_data).sort_values(by="Eficiência", ascending=False)
+            st.dataframe(
+                df_res,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Eficiência": st.column_config.ProgressColumn("Eficiência %", min_value=0, max_value=100, format="%d%%"),
+                    "Analista": st.column_config.TextColumn("Analista", width="medium"),
+                }
+            )
+
+        with t_lista:
+            if not view_tasks:
+                st.info("Nenhum dado encontrado com os filtros selecionados.")
+            else:
+                df_all = pd.DataFrame([t.__dict__ for t in view_tasks])
+                
+                # Botões de Ação
+                col_btn, col_spacer = st.columns([0.3, 0.7])
+                with col_btn:
+                    csv = df_all.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        "📥 Exportar Relatório (CSV)", 
+                        data=csv, 
+                        file_name=f"gestao_demandas_{datetime.now().strftime('%Y%m%d')}.csv", 
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+
+                st.dataframe(
+                    df_all[["responsible", "title", "status", "priority", "due_date", "category"]],
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "responsible": "Responsável",
+                        "title": "Assunto/Demandas",
+                        "status": "Status",
+                        "priority": "Prioridade",
+                        "due_date": "Prazo",
+                        "category": "Categoria"
+                    }
+                )
+
 
 def initialize_app() -> None:
     st.set_page_config(**PAGE_CONFIG)
     load_custom_css()
     dm = DataManager()
+    if "categories" not in st.session_state:
+        st.session_state.categories = dm.load_categories()
     if "tasks" not in st.session_state:
         st.session_state.tasks = dm.load_tasks()
+    if "requests" not in st.session_state:
+        st.session_state.requests = dm.load_requests()
+
     if "show_modal" not in st.session_state:
         st.session_state.show_modal = False
+    if "show_category_modal" not in st.session_state:
+        st.session_state.show_category_modal = False
     if "show_updates_for_task" not in st.session_state:
         st.session_state.show_updates_for_task = None
     if "selected_tasks" not in st.session_state:
@@ -2356,17 +3255,133 @@ def initialize_app() -> None:
 def main() -> None:
     initialize_app()
     
-    search, page, cat_filter = NavigationSystem.render()
-    UIComponents.render_page_header(page)
+    # --- VERIFICAÇÃO DE LOGIN ---
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+    
+    if not st.session_state.authenticated:
+        login_page()
+        return
+    # ---------------------------
+    
+    search, page = NavigationSystem.render()
+    
+    # Cabeçalho Principal (Título + Controles)
+    # Cabeçalho Principal (Título + Controles)
+    h_c1, h_c2 = st.columns([0.55, 0.45])
+    
+    # Identificação do Usuário
+    current_matricula = st.session_state.get("current_user", "2949400")
+    if current_matricula == "GESTAO":
+        user_name = "Gestão"
+    else:
+        try:
+            user_data = buscar_colaborador_por_matricula(current_matricula)
+            user_name = user_data.get("nome", "Visitante").split()[0]
+        except:
+            user_name = "Visitante"
+
+    cat_filter = "Todos"
+    analyst_filter = "Todos"
+    is_admin_or_manager = current_matricula in ["2949400", "2484901", "GESTAO"]
+    
+    # Esquerda: Título da Página
+    with h_c1:
+        UIComponents.render_page_header(page)
+        
+    # Direita: Controles (Filtro, Config, Perfil)
+    with h_c2:
+         # ROW 1: Perfil (Nome + Avatar)
+         rp0, rp1, rp2 = st.columns([0.65, 0.2, 0.15])
+         
+         with rp1:
+            st.markdown(
+                f"""
+                <div style="text-align: right; line-height: 1.1; padding-top: 10px;">
+                    <span style="display: block; font-size: 0.7rem; color: #94a3b8;">Olá,</span>
+                    <span style="display: block; font-weight: 600; font-size: 0.85rem; color: #f8fafc;">{user_name}</span>
+                </div>
+                """, unsafe_allow_html=True
+            )
+         with rp2:
+             st.markdown(
+                f"""
+                <div style="display: flex; justify-content: center; align-items: center; padding-top: 8px;">
+                    <div style="width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, #6366f1, #a855f7); display: flex; align-items: center; justify-content: center; font-weight: 700; color: white; font-size: 0.85rem; border: 2px solid rgba(255,255,255,0.1);">
+                        {user_name[0].upper()}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True
+             )
+
+         # Spacer between rows
+         st.markdown("<br>", unsafe_allow_html=True)
+
+         # ROW 2: Área de Filtros (Esticada)
+         if is_admin_or_manager or page == "Quadros":
+            r_cols = st.columns([0.01, 0.49, 0.5])
+            
+            with r_cols[1]:
+                if is_admin_or_manager:
+                    all_ans = sorted(list(set([t.responsible.title().strip() for t in st.session_state.tasks if t.responsible])))
+                    analyst_filter = st.selectbox(
+                        "Analista",
+                        ["Todos"] + all_ans,
+                        index=0,
+                        key="header_analyst_filter",
+                        label_visibility="collapsed"
+                    )
+
+            with r_cols[2]:
+                allowed_header_cats = []
+                
+                # Se um analista específico estiver selecionado no header, filtrar os temas dele
+                if is_admin_or_manager and analyst_filter != "Todos":
+                    # Pega temas que o analista tem tarefas atribuídas
+                    allowed_header_cats = sorted(list(set([t.category for t in st.session_state.tasks if t.responsible == analyst_filter])))
+                else:
+                    # Lógica padrão de carregamento
+                    for v in st.session_state.categories.values():
+                        owner = v.get("owner")
+                        if is_admin_or_manager:
+                            allowed_header_cats.append(v["name"])
+                        elif owner == current_matricula:
+                            allowed_header_cats.append(v["name"])
+                        elif owner is None and current_matricula == "2949400":
+                            allowed_header_cats.append(v["name"])
+
+                cat_opts = ["Todos"] + sorted(list(set(allowed_header_cats)))
+                cat_filter = st.selectbox(
+                    "Filtro",
+                    cat_opts,
+                    index=0,
+                    label_visibility="collapsed",
+                    key="header_cat_filter"
+                )
     
     # Modais
     NewTaskModal.render()
     UpdatesModal.render()
+    CategoryManagerModal.render()
     
     # Filtro geral por quadro e busca
     all_tasks: List[Task] = st.session_state.tasks
+    
+    # --- FILTRO DE PRIVACIDADE ---
+    # Se não for Admin (Maicon) nem Gestor (Melissa), vê apenas suas demandas
+    # Admins: 2949400, 2484901
+    
+    # Nota: user_name já foi calculado no header (Primeiro nome)
+    # Se user_name for "Visitante" (falha no login), não mostra nada
+    
+    if current_matricula not in ["2949400", "2484901", "GESTAO"]:
+        all_tasks = [t for t in all_tasks if t.responsible == user_name]
+    
     if cat_filter != "Todos":
         all_tasks = [t for t in all_tasks if t.category == cat_filter]
+        
+    if analyst_filter != "Todos":
+        all_tasks = [t for t in all_tasks if t.responsible.lower() == analyst_filter.lower()]
     if search:
         q = search.lower()
         all_tasks = [
@@ -2379,8 +3394,9 @@ def main() -> None:
         "Quadros": BoardsView,
         "Calendário": CalendarView,
         "Kanban": KanbanView,
-        "Timeline": TimelineView,
+        "Requisições": RequestsView,
         "Follow-Up": FollowUpView,
+        "Gestão": ManagerDashboardView,
     }
     
     if page in views:

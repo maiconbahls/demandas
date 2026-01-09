@@ -1,0 +1,44 @@
+[
+  {
+    "subelement": "RC - 545654",
+    "date_opening": "2026-01-09",
+    "description": "PAGAMENTO FATEC POMPEI",
+    "rc_code": "454415",
+    "buyer": "Maicon",
+    "situation": "Em andamento",
+    "attachments": [],
+    "po_number": "15014",
+    "nf_tracking": "Aguardando recebimento",
+    "nf_attachments": [],
+    "id": 1767972966432,
+    "created_at": "2026-01-09"
+  },
+  {
+    "subelement": "RC",
+    "date_opening": "2026-01-09",
+    "description": "PAGAMENTO ",
+    "rc_code": "",
+    "buyer": "",
+    "situation": "Pendente",
+    "attachments": [],
+    "po_number": "",
+    "nf_tracking": "Aguardando recebimento",
+    "nf_attachments": [],
+    "id": 1767973996292,
+    "created_at": "2026-01-09"
+  },
+  {
+    "subelement": "RC",
+    "date_opening": "2026-01-09",
+    "description": "",
+    "rc_code": "",
+    "buyer": "",
+    "situation": "Pendente",
+    "attachments": [],
+    "po_number": "",
+    "nf_tracking": "Aguardando recebimento",
+    "nf_attachments": [],
+    "id": 1767973999109,
+    "created_at": "2026-01-09"
+  }
+]
