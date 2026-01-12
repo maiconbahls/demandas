@@ -2941,42 +2941,32 @@ def load_custom_css() -> None:
         }
         
         /* 2. BUTTONS: DARK SLATE, WHITE TEXT, VISIBLE BORDER (Global Fix) */
-        .stButton > button {
-            background-color: #1e293b !important; /* Slate 800 */
+        /* 2. BUTTONS: FORCE DARK & CLEAR VISIBILITY */
+        div.stButton > button {
+            background-color: #1e293b !important; /* Dark Slate to match theme */
             color: #ffffff !important;
-            border: 1px solid rgba(255, 255, 255, 0.5) !important;
-            border-radius: 8px !important;
-            transition: transform 0.1s ease, background-color 0.2s !important;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.3) !important;
+            border: 1px solid rgba(255, 255, 255, 0.2) !important;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3) !important;
         }
         
-        .stButton > button:hover {
-            background-color: #334155 !important; /* Slate 700 */
+        div.stButton > button:hover {
+            background-color: #334155 !important;
             border-color: #ffffff !important;
             color: #ffffff !important;
-            transform: scale(1.02);
-            box-shadow: 0 4px 8px rgba(0,0,0,0.5) !important;
         }
         
-        .stButton > button:active, .stButton > button:focus {
-            background-color: #6366f1 !important; /* Indigo for Click */
-            border-color: #ffffff !important;
-            color: #ffffff !important;
+        div.stButton > button p {
+             color: #ffffff !important; /* Force text inside button to be white */
         }
 
-        /* 3. TASK CARDS: STRONG WHITE BORDER */
-        div[data-testid="stVerticalBlockBorderWrapper"] {
-            border: 2px solid #ffffff !important;
-            -webkit-box-shadow: 0 0 0 1px #ffffff !important; /* Backup Border via Shadow */
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3), 0 0 0 1px #ffffff !important;
-            background-color: rgba(30, 41, 59, 0.3) !important;
-        }
+        /* 3. TASK CARDS: RESTORE ELEGANT BORDER (Remove Heavy White) */
+        /* The aggressive white border block has been removed to restore original look */
         
         /* 4. TOASTS & ALERTS: HIGH CONTRAST */
         div[data-testid="stToast"], div[data-testid="stAlert"], div.stToast {
             background-color: #0f172a !important;
             color: #ffffff !important;
-            border: 1px solid white !important;
+            border: 1px solid rgba(255,255,255,0.2) !important;
         }
         div[data-testid="stToast"] *, div[data-testid="stAlert"] * {
             color: #ffffff !important;
