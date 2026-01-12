@@ -2959,9 +2959,13 @@ def load_custom_css() -> None:
              color: #ffffff !important; /* Force text inside button to be white */
         }
 
-        /* 3. TASK CARDS: RESTORE ELEGANT BORDER (Remove Heavy White) */
-        /* The aggressive white border block has been removed to restore original look */
-        
+        /* 3. TASK CARDS: RESTORE WHITE BORDER (User Request) */
+        div[data-testid="stVerticalBlockBorderWrapper"] {
+            border: 1px solid rgba(255, 255, 255, 0.3) !important;
+            background-color: rgba(30, 41, 59, 0.4) !important;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1) !important;
+        }
+
         /* 4. TOASTS & ALERTS: HIGH CONTRAST */
         div[data-testid="stToast"], div[data-testid="stAlert"], div.stToast {
             background-color: #0f172a !important;
