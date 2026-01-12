@@ -3006,21 +3006,28 @@ def load_custom_css() -> None:
 
         /* 4. ENHANCE TASK CARD VISIBILITY (Visible Borders) */
         div[data-testid="stVerticalBlockBorderWrapper"] {
-            border: 1px solid rgba(148, 163, 184, 0.25) !important; /* Mais visível */
+            border: 1px solid rgba(255, 255, 255, 0.6) !important; /* Borda Branca Bem Visível */
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3) !important;
         }
         
         /* 5. FIX TOAST & ALERTS (Success/Error Messages) */
-        div[data-testid="stToast"], div[data-testid="stAlert"] {
-            background-color: rgba(30, 41, 59, 0.95) !important;
-            color: #f8fafc !important;
-            border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        div[data-testid="stToast"], 
+        div[data-testid="stAlert"], 
+        div[data-testid="stNotification"],
+        div.stToast,
+        div.stAlert {
+            background-color: #1e293b !important; /* Slate 800 Solid */
+            color: #ffffff !important;
+            border: 1px solid rgba(255, 255, 255, 0.2) !important;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3) !important;
         }
-        div[data-testid="stToast"] p, div[data-testid="stAlert"] p {
-            color: #f8fafc !important;
-        }
-        div[data-testid="stMarkdownContainer"] p {
-             color: inherit !important;
+        
+        div[data-testid="stToast"] p, 
+        div[data-testid="stAlert"] p,
+        div[data-testid="stToast"] div, 
+        div[data-testid="stAlert"] div {
+            color: #ffffff !important;
+            font-weight: 500 !important;
         }
 
         /* 6. FIX MODAL/DIALOG TEXT COLOR */
