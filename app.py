@@ -1216,27 +1216,34 @@ class BoardsView:
                 z-index: 5;
             }
 
-            /* Botões de Ação (Ícones) - Estilo Ghost/Minimalista */
-            div[data-testid="column"] button {
-                padding: 0px !important;
-                min-height: 36px !important;
-                height: 36px !important;
-                width: 100% !important;
-                border: 1px solid rgba(255,255,255,0.08) !important;
-                background-color: rgba(255,255,255,0.03) !important;
-                border-radius: 8px !important;
-                display: flex !important;
-                align-items: center !important;
-                justify-content: center !important;
-                transition: all 0.2s ease;
-                color: rgba(255, 255, 255, 0.6) !important;
-            }
+            /* Botões de Ação (Ícones) - Estilo Ghost/Minimalista - ROBUST */
+        .task-footer-columns div[data-testid="column"] button {
+            background-color: transparent !important;
+            background: transparent !important;
+            border: 1px solid rgba(255, 255, 255, 0.1) !important;
+            color: rgba(255, 255, 255, 0.7) !important;
+            border-radius: 8px !important;
+            min-height: 36px !important;
+            height: 36px !important;
+            width: 100% !important;
+            transition: all 0.2s ease !important;
+            box-shadow: none !important;
+        }
 
-            div[data-testid="column"] button:hover {
-                background-color: rgba(255, 255, 255, 0.1) !important;
-                color: white !important;
-                transform: scale(1.05);
-            }
+        .task-footer-columns div[data-testid="column"] button:hover {
+            background-color: rgba(255, 255, 255, 0.1) !important;
+            border-color: rgba(255, 255, 255, 0.3) !important;
+            color: white !important;
+            transform: scale(1.05);
+        }
+        
+        .task-footer-columns div[data-testid="column"] button:active,
+        .task-footer-columns div[data-testid="column"] button:focus {
+            background-color: rgba(255, 255, 255, 0.15) !important;
+            color: white !important;
+            border-color: #6366f1 !important;
+            box-shadow: none !important;
+        }    }
             
             /* Melhoria visual para raias do Kanban */
             .kanban-card-hover:hover {
@@ -2306,16 +2313,29 @@ class FollowUpView:
                          with st.expander("🗨️ Adicionar Notificação / Feedback", expanded=False):
                               curr_val = getattr(t, "manager_feedback", "")
                               new_feed = st.text_area("Mensagem para o analista", value=curr_val, key=f"feed_{t.id}", height=70, placeholder="Ex: Priorizar esta entrega...")
-                              if st.button("💾 Salvar Notificação", key=f"save_feed_{t.id}", use_container_width=True):
-                                   t.manager_feedback = new_feed
-                                   # Encontrar a tarefa real no session_state para salvar (pois 't' é uma cópia da lista local)
-                                   real_t = next((x for x in st.session_state.tasks if x.id == t.id), None)
-                                   if real_t:
-                                       real_t.manager_feedback = new_feed
-                                       st.session_state.data_manager.save_tasks(st.session_state.tasks)
-                                       st.toast("Feedback salvo com sucesso!")
-                                       time.sleep(1)
-                                       st.rerun()
+                              
+                              f_col1, f_col2 = st.columns([0.6, 0.4])
+                              with f_col1:
+                                  if st.button("💾 Salvar Notificação", key=f"save_feed_{t.id}", use_container_width=True):
+                                       t.manager_feedback = new_feed
+                                       # Encontrar a tarefa real no session_state para salvar (pois 't' é uma cópia da lista local)
+                                       real_t = next((x for x in st.session_state.tasks if x.id == t.id), None)
+                                       if real_t:
+                                           real_t.manager_feedback = new_feed
+                                           st.session_state.data_manager.save_tasks(st.session_state.tasks)
+                                           st.toast("Feedback salvo com sucesso!")
+                                           time.sleep(1)
+                                           st.rerun()
+                              with f_col2:
+                                   if st.button("🗑️ Excluir", key=f"del_feed_{t.id}", use_container_width=True):
+                                       t.manager_feedback = ""
+                                       real_t = next((x for x in st.session_state.tasks if x.id == t.id), None)
+                                       if real_t:
+                                           real_t.manager_feedback = ""
+                                           st.session_state.data_manager.save_tasks(st.session_state.tasks)
+                                           st.toast("Feedback removido!")
+                                           time.sleep(1)
+                                           st.rerun()
             else:
                 st.success("🎉 Nenhuma tarefa atrasada ou crítica!")
         
