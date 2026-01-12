@@ -2943,13 +2943,44 @@ def load_custom_css() -> None:
             caret-color: #6366f1 !important;
             background-color: transparent !important;
         }
-        
-        /* Fix Input placeholders/labels */
-        ::placeholder { color: rgba(148, 163, 184, 0.5) !important; opacity: 1; }
-        
-        /* Fix Selectbox Borders which might disappear */
-        div[data-baseweb="select"] > div {
+
+        /* GLOBAL INPUT FIX (Text, Date, Number) */
+        div[data-baseweb="input"] {
+            background-color: transparent !important;
+            background: transparent !important;
             border-color: rgba(255, 255, 255, 0.2) !important;
+            color: #f8fafc !important;
+        }
+
+        /* GLOBAL SELECT FIX */
+        div[data-baseweb="select"] > div {
+            background-color: transparent !important;
+            border-color: rgba(255, 255, 255, 0.2) !important;
+            color: #f8fafc !important;
+        }
+
+        /* GLOBAL GHOST BUTTONS (All Secondary Buttons) */
+        .stButton > button {
+            background-color: transparent !important;
+            background: transparent !important;
+            background-image: none !important;
+            border: 1px solid rgba(255, 255, 255, 0.1) !important;
+            color: rgba(255, 255, 255, 0.7) !important;
+            border-radius: 8px !important;
+            transition: all 0.2s ease !important;
+            box-shadow: none !important;
+        }
+        
+        .stButton > button:hover {
+            background-color: rgba(255, 255, 255, 0.1) !important;
+            border-color: rgba(255, 255, 255, 0.3) !important;
+            color: white !important;
+        }
+
+        .stButton > button:active, .stButton > button:focus {
+            background-color: rgba(255, 255, 255, 0.15) !important;
+            border-color: #6366f1 !important;
+            color: white !important;
         }
         
         /* Corrigir Selectbox Dropdown (Opções) */
