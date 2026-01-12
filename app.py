@@ -1196,57 +1196,26 @@ class BoardsView:
             div[data-testid="stSelectbox"] svg {
                 fill: #aaa !important;
             }
-            
-            /* Card de Tarefa (Container com Borda) - Estilo Premium */
+
+            /* SUPERNOVA LOCAL FIX: TASK CARD BORDER & BUTTONS */
             div[data-testid="stVerticalBlockBorderWrapper"] {
-                background: linear-gradient(160deg, rgba(37, 42, 64, 0.8) 0%, rgba(30, 34, 53, 0.8) 100%) !important;
-                border: 1px solid rgba(100, 116, 139, 0.2) !important;
-                border-radius: 16px !important;
-                padding: 12px 16px !important;
+                border: 2px solid #ffffff !important;
+                background-color: rgba(30, 41, 59, 0.4) !important;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3) !important;
                 margin-bottom: 12px !important;
-                box-shadow: 0 4px 15px rgba(0,0,0,0.1) !important;
-                transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1) !important;
+            }
+
+            div[data-testid="stVerticalBlockBorderWrapper"] .stButton > button {
+                background-color: #0f172a !important;
+                color: #ffffff !important;
+                border: 1px solid rgba(255, 255, 255, 0.5) !important;
             }
             
-            div[data-testid="stVerticalBlockBorderWrapper"]:hover {
-                transform: translateY(-4px) scale(1.005);
-                box-shadow: 0 12px 30px rgba(99, 102, 241, 0.25) !important;
-                border-color: rgba(99, 102, 241, 0.6) !important;
-                background: linear-gradient(160deg, rgba(42, 48, 74, 1) 0%, rgba(35, 39, 62, 1) 100%) !important;
-                z-index: 5;
+            div[data-testid="stVerticalBlockBorderWrapper"] .stButton > button:hover {
+                background-color: #6366f1 !important;
+                border-color: #ffffff !important;
+                transform: scale(1.05);
             }
-
-        /* Botões de Ação (Ícones) - Estilo Ghost/Minimalista - UNIVERSAL FIX */
-        div[data-testid="stVerticalBlockBorderWrapper"] .stButton > button {
-            background-color: transparent !important;
-            background: transparent !important;
-            background-image: none !important;
-            border: 1px solid rgba(255, 255, 255, 0.1) !important;
-            color: rgba(255, 255, 255, 0.7) !important;
-            border-radius: 8px !important;
-            min-height: 36px !important;
-            height: 36px !important;
-            width: 100% !important;
-            transition: all 0.2s ease !important;
-            box-shadow: none !important;
-        }
-
-        div[data-testid="stVerticalBlockBorderWrapper"] .stButton > button:hover {
-            background-color: rgba(255, 255, 255, 0.1) !important;
-            border-color: rgba(255, 255, 255, 0.3) !important;
-            color: white !important;
-            transform: scale(1.05);
-            background-image: none !important;
-        }
-        
-        div[data-testid="stVerticalBlockBorderWrapper"] .stButton > button:active,
-        div[data-testid="stVerticalBlockBorderWrapper"] .stButton > button:focus {
-            background-color: rgba(255, 255, 255, 0.15) !important;
-            color: white !important;
-            border-color: #6366f1 !important;
-            box-shadow: none !important;
-            background-image: none !important;
-        }
             
             /* Melhoria visual para raias do Kanban */
             .kanban-card-hover:hover {
@@ -2949,78 +2918,73 @@ def load_custom_css() -> None:
            (High Specificity Overrides)
            ================================================================================== */
            
-        /* 0. GLOBAL TEXT COLOR FIX (Fix Invisible Loading Messages) */
-        html, body, .stApp, .stApp > header, .stApp > div {
-             color: #f8fafc !important;
-        }
+        /* ==================================================================================
+           SUPERNOVA OPTION: GLOBAL OVERRIDES FOR STABILITY
+           ================================================================================== */
         
-        /* 1. FORCE VISIBLE INPUTS (Login & Others) */
-        html body .stTextInput input,
-        html body .stDateInput input,
-        html body .stNumberInput input,
-        html body .stSelectbox div[data-baseweb="select"] > div {
-            background-color: rgba(15, 23, 42, 0.8) !important; /* Fundo escuro semitransparente */
-            border: 1px solid rgba(255, 255, 255, 0.3) !important;
-            color: #ffffff !important; /* Texto BRANCO PURO */
-            font-weight: 600 !important; /* Texto em negrito */
-            caret-color: #ffffff !important;
-        }
-
-        /* 2. TASK CARD BUTTONS (Dark Background Force) */
-        /* Forçando fundo ESCURO para que o ícone branco apareça */
-        div[data-testid="stVerticalBlockBorderWrapper"] .stButton > button {
-            background-color: #0f172a !important; /* Azul Escuro Profundo */
-            background: #0f172a !important;
-            border: 1px solid rgba(255,255,255,0.3) !important;
+        /* 0. FORCE GLOBAL TEXT COLOR */
+        html, body, .stApp, .stApp header {
             color: #ffffff !important;
-            border-radius: 8px !important;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.5) !important;
-        }
-        
-        div[data-testid="stVerticalBlockBorderWrapper"] .stButton > button:hover {
-            background-color: #6366f1 !important; /* Roxo no hover */
-            border-color: #ffffff !important;
-            color: white !important;
-            transform: scale(1.05);
         }
 
-        /* 3. FIX AUTOFILL BACKGROUNDS (Login Page) */
-        input:-webkit-autofill,
-        input:-webkit-autofill:hover, 
-        input:-webkit-autofill:focus, 
-        input:-webkit-autofill:active {
-            -webkit-box-shadow: 0 0 0 30px #1e293b inset !important;
-            -webkit-text-fill-color: white !important;
-            transition: background-color 5000s ease-in-out 0s;
-            caret-color: white !important;
+        /* 1. INPUTS: DARK BACKGROUND, WHITE TEXT */
+        div[data-baseweb="input"], 
+        div[data-baseweb="select"] > div,
+        input.stTextInput, 
+        input {
+            background-color: rgba(15, 23, 42, 0.9) !important;
+            color: #ffffff !important;
+            caret-color: #ffffff !important;
+            border: 1px solid rgba(255, 255, 255, 0.4) !important;
             font-weight: 600 !important;
         }
+        
+        /* 2. BUTTONS: DARK SLATE, WHITE TEXT, VISIBLE BORDER (Global Fix) */
+        .stButton > button {
+            background-color: #1e293b !important; /* Slate 800 */
+            color: #ffffff !important;
+            border: 1px solid rgba(255, 255, 255, 0.5) !important;
+            border-radius: 8px !important;
+            transition: transform 0.1s ease, background-color 0.2s !important;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3) !important;
+        }
+        
+        .stButton > button:hover {
+            background-color: #334155 !important; /* Slate 700 */
+            border-color: #ffffff !important;
+            color: #ffffff !important;
+            transform: scale(1.02);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.5) !important;
+        }
+        
+        .stButton > button:active, .stButton > button:focus {
+            background-color: #6366f1 !important; /* Indigo for Click */
+            border-color: #ffffff !important;
+            color: #ffffff !important;
+        }
 
-        /* 4. ENHANCE TASK CARD VISIBILITY (Solid White Borders) */
+        /* 3. TASK CARDS: STRONG WHITE BORDER */
         div[data-testid="stVerticalBlockBorderWrapper"] {
-            border: 2px solid #ffffff !important; /* Borda Branca Sólida 2px */
-            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.5) !important;
-            background-color: rgba(30, 41, 59, 0.4) !important;
+            border: 2px solid #ffffff !important;
+            -webkit-box-shadow: 0 0 0 1px #ffffff !important; /* Backup Border via Shadow */
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3), 0 0 0 1px #ffffff !important;
+            background-color: rgba(30, 41, 59, 0.3) !important;
         }
         
-        /* 5. FIX TOAST & ALERTS (Success/Error Messages) */
-        div[data-testid="stToast"], 
-        div[data-testid="stAlert"], 
-        div[data-testid="stNotification"],
-        div.stToast,
-        div.stAlert {
-            background-color: #1e293b !important; /* Slate 800 Solid */
+        /* 4. TOASTS & ALERTS: HIGH CONTRAST */
+        div[data-testid="stToast"], div[data-testid="stAlert"], div.stToast {
+            background-color: #0f172a !important;
             color: #ffffff !important;
-            border: 1px solid rgba(255, 255, 255, 0.2) !important;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3) !important;
+            border: 1px solid white !important;
         }
-        
-        div[data-testid="stToast"] p, 
-        div[data-testid="stAlert"] p,
-        div[data-testid="stToast"] div, 
-        div[data-testid="stAlert"] div {
+        div[data-testid="stToast"] *, div[data-testid="stAlert"] * {
             color: #ffffff !important;
-            font-weight: 500 !important;
+        }
+
+        /* 5. AUTOFILL FIX */
+        input:-webkit-autofill {
+            -webkit-box-shadow: 0 0 0 30px #1e293b inset !important;
+            -webkit-text-fill-color: white !important;
         }
 
         /* 6. FIX MODAL/DIALOG TEXT COLOR */
