@@ -1216,10 +1216,11 @@ class BoardsView:
                 z-index: 5;
             }
 
-            /* Botões de Ação (Ícones) - Estilo Ghost/Minimalista - ROBUST */
-        .task-footer-columns div[data-testid="column"] button {
+        /* Botões de Ação (Ícones) - Estilo Ghost/Minimalista - UNIVERSAL FIX */
+        div[data-testid="stVerticalBlockBorderWrapper"] .stButton > button {
             background-color: transparent !important;
             background: transparent !important;
+            background-image: none !important;
             border: 1px solid rgba(255, 255, 255, 0.1) !important;
             color: rgba(255, 255, 255, 0.7) !important;
             border-radius: 8px !important;
@@ -1230,19 +1231,21 @@ class BoardsView:
             box-shadow: none !important;
         }
 
-        .task-footer-columns div[data-testid="column"] button:hover {
+        div[data-testid="stVerticalBlockBorderWrapper"] .stButton > button:hover {
             background-color: rgba(255, 255, 255, 0.1) !important;
             border-color: rgba(255, 255, 255, 0.3) !important;
             color: white !important;
             transform: scale(1.05);
+            background-image: none !important;
         }
         
-        .task-footer-columns div[data-testid="column"] button:active,
-        .task-footer-columns div[data-testid="column"] button:focus {
+        div[data-testid="stVerticalBlockBorderWrapper"] .stButton > button:active,
+        div[data-testid="stVerticalBlockBorderWrapper"] .stButton > button:focus {
             background-color: rgba(255, 255, 255, 0.15) !important;
             color: white !important;
             border-color: #6366f1 !important;
             box-shadow: none !important;
+            background-image: none !important;
         }    }
             
             /* Melhoria visual para raias do Kanban */
