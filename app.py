@@ -3409,6 +3409,16 @@ def login_page():
             margin-bottom: 1rem;
             filter: drop-shadow(0 0 20px rgba(99, 102, 241, 0.3));
         }
+        /* Fix for Edge/Chrome Autofill Backgrounds */
+        input:-webkit-autofill,
+        input:-webkit-autofill:hover, 
+        input:-webkit-autofill:focus, 
+        input:-webkit-autofill:active {
+            -webkit-box-shadow: 0 0 0 30px #1e293b inset !important;
+            -webkit-text-fill-color: white !important;
+            transition: background-color 5000s ease-in-out 0s;
+        }
+
         .login-subtitle-modern {
             background: linear-gradient(90deg, #cbd5e1, #ffffff, #cbd5e1);
             -webkit-background-clip: text;
@@ -3507,13 +3517,11 @@ def login_page():
         font-family: 'Inter', sans-serif;
         font-weight: 900;
         font-size: 5rem;
-        background: linear-gradient(180deg, #ffffff 0%, #64748b 150%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
+        color: #ffffff;
         margin: 0;
         letter-spacing: -4px;
         line-height: 0.9;
-        filter: drop-shadow(0 0 40px rgba(99, 102, 241, 0.4));
+        text-shadow: 0 0 40px rgba(99, 102, 241, 0.6);
     ">DHO</h1>
     <div style="
         height: 6px;
