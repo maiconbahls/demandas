@@ -2938,9 +2938,18 @@ def load_custom_css() -> None:
         }
         
         .stTextInput input, .stTextArea textarea, .stSelectbox div[data-baseweb="select"] > div, .stDateInput input {
-            color: white !important;
-            -webkit-text-fill-color: white !important;
+            color: #f8fafc !important;
+            -webkit-text-fill-color: #f8fafc !important;
             caret-color: #6366f1 !important;
+            background-color: transparent !important;
+        }
+        
+        /* Fix Input placeholders/labels */
+        ::placeholder { color: rgba(148, 163, 184, 0.5) !important; opacity: 1; }
+        
+        /* Fix Selectbox Borders which might disappear */
+        div[data-baseweb="select"] > div {
+            border-color: rgba(255, 255, 255, 0.2) !important;
         }
         
         /* Corrigir Selectbox Dropdown (Opções) */
