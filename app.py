@@ -1246,7 +1246,7 @@ class BoardsView:
             border-color: #6366f1 !important;
             box-shadow: none !important;
             background-image: none !important;
-        }    }
+        }
             
             /* Melhoria visual para raias do Kanban */
             .kanban-card-hover:hover {
@@ -2949,6 +2949,11 @@ def load_custom_css() -> None:
            (High Specificity Overrides)
            ================================================================================== */
            
+        /* 0. GLOBAL TEXT COLOR FIX (Fix Invisible Loading Messages) */
+        html, body, .stApp, .stApp > header, .stApp > div {
+             color: #f8fafc !important;
+        }
+        
         /* 1. FORCE TRANSPARENT INPUTS (Fix White Boxes) */
         html body .stTextInput div[data-baseweb="input"],
         html body .stDateInput div[data-baseweb="input"],
@@ -2956,17 +2961,17 @@ def load_custom_css() -> None:
         html body .stSelectbox div[data-baseweb="select"] > div {
             background-color: transparent !important;
             background: transparent !important;
-            border: 1px solid rgba(255, 255, 255, 0.2) !important;
+            border: 1px solid rgba(255, 255, 255, 0.3) !important;
             color: #f8fafc !important;
         }
 
-        /* 2. FORCE GHOST BUTTONS (Fix White Buttons) */
+        /* 2. FORCE GHOST BUTTONS WITH VISIBLE BORDER */
         html body .stButton > button {
             background-color: transparent !important;
             background: transparent !important;
             background-image: none !important;
-            border: 1px solid rgba(255, 255, 255, 0.15) !important;
-            color: rgba(255, 255, 255, 0.8) !important;
+            border: 1px solid rgba(255, 255, 255, 0.45) !important; /* Borda Branca Visível */
+            color: rgba(255, 255, 255, 0.9) !important;
             border-radius: 8px !important;
             box-shadow: none !important;
             text-shadow: none !important;
@@ -2975,7 +2980,7 @@ def load_custom_css() -> None:
         
         html body .stButton > button:hover {
             background-color: rgba(255, 255, 255, 0.1) !important;
-            border-color: rgba(255, 255, 255, 0.4) !important;
+            border-color: rgba(255, 255, 255, 0.8) !important;
             color: white !important;
             transform: scale(1.02);
         }
