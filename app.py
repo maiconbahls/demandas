@@ -2944,43 +2944,83 @@ def load_custom_css() -> None:
             background-color: transparent !important;
         }
 
-        /* GLOBAL INPUT FIX (Text, Date, Number) */
-        div[data-baseweb="input"] {
+        /* ==================================================================================
+           NUCLEAR OPTION FOR MICROSOFT EDGE & BRAVE
+           (High Specificity Overrides)
+           ================================================================================== */
+           
+        /* 1. FORCE TRANSPARENT INPUTS (Fix White Boxes) */
+        html body .stTextInput div[data-baseweb="input"],
+        html body .stDateInput div[data-baseweb="input"],
+        html body .stNumberInput div[data-baseweb="input"],
+        html body .stSelectbox div[data-baseweb="select"] > div {
             background-color: transparent !important;
             background: transparent !important;
-            border-color: rgba(255, 255, 255, 0.2) !important;
+            border: 1px solid rgba(255, 255, 255, 0.2) !important;
             color: #f8fafc !important;
         }
 
-        /* GLOBAL SELECT FIX */
-        div[data-baseweb="select"] > div {
-            background-color: transparent !important;
-            border-color: rgba(255, 255, 255, 0.2) !important;
-            color: #f8fafc !important;
-        }
-
-        /* GLOBAL GHOST BUTTONS (All Secondary Buttons) */
-        .stButton > button {
+        /* 2. FORCE GHOST BUTTONS (Fix White Buttons) */
+        html body .stButton > button {
             background-color: transparent !important;
             background: transparent !important;
             background-image: none !important;
-            border: 1px solid rgba(255, 255, 255, 0.1) !important;
-            color: rgba(255, 255, 255, 0.7) !important;
+            border: 1px solid rgba(255, 255, 255, 0.15) !important;
+            color: rgba(255, 255, 255, 0.8) !important;
             border-radius: 8px !important;
-            transition: all 0.2s ease !important;
             box-shadow: none !important;
+            text-shadow: none !important;
+            transition: all 0.2s ease !important;
         }
         
-        .stButton > button:hover {
+        html body .stButton > button:hover {
             background-color: rgba(255, 255, 255, 0.1) !important;
-            border-color: rgba(255, 255, 255, 0.3) !important;
+            border-color: rgba(255, 255, 255, 0.4) !important;
             color: white !important;
+            transform: scale(1.02);
         }
 
-        .stButton > button:active, .stButton > button:focus {
-            background-color: rgba(255, 255, 255, 0.15) !important;
+        html body .stButton > button:active,
+        html body .stButton > button:focus {
+            background-color: rgba(255, 255, 255, 0.2) !important;
             border-color: #6366f1 !important;
             color: white !important;
+            box-shadow: none !important;
+        }
+
+        /* 3. FIX AUTOFILL BACKGROUNDS (Login Page) */
+        input:-webkit-autofill,
+        input:-webkit-autofill:hover, 
+        input:-webkit-autofill:focus, 
+        input:-webkit-autofill:active {
+            -webkit-box-shadow: 0 0 0 30px #1e293b inset !important;
+            -webkit-text-fill-color: white !important;
+            transition: background-color 5000s ease-in-out 0s;
+            caret-color: white !important;
+        }
+
+        /* 4. ENHANCE TASK CARD VISIBILITY (Visible Borders) */
+        div[data-testid="stVerticalBlockBorderWrapper"] {
+            border: 1px solid rgba(148, 163, 184, 0.25) !important; /* Mais visível */
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3) !important;
+        }
+        
+        /* 5. FIX TOAST & ALERTS (Success/Error Messages) */
+        div[data-testid="stToast"], div[data-testid="stAlert"] {
+            background-color: rgba(30, 41, 59, 0.95) !important;
+            color: #f8fafc !important;
+            border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        }
+        div[data-testid="stToast"] p, div[data-testid="stAlert"] p {
+            color: #f8fafc !important;
+        }
+        div[data-testid="stMarkdownContainer"] p {
+             color: inherit !important;
+        }
+
+        /* 6. FIX MODAL/DIALOG TEXT COLOR */
+        div[role="dialog"] h1, div[role="dialog"] h2, div[role="dialog"] h3, div[role="dialog"] label {
+             color: #f8fafc !important;
         }
         
         /* Corrigir Selectbox Dropdown (Opções) */
