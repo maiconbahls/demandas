@@ -1422,8 +1422,7 @@ class BoardsView:
                     if not task.description:
                          st.markdown("<div style='margin-bottom:12px;'></div>", unsafe_allow_html=True)
 
-                    # Área Interativa (Widgets Streamlit) - Envolvida em container para escopo CSS
-                    st.markdown('<div class="task-footer-columns">', unsafe_allow_html=True)
+                    # Área Interativa (Widgets Streamlit)
                     c_resp, c_date, c_stat, c_prio, c_acts = st.columns([0.15, 0.15, 0.18, 0.18, 0.34])
                     
                     with c_resp:
@@ -1464,7 +1463,6 @@ class BoardsView:
                                  if is_expanded: st.session_state.expanded_task_updates.discard(task.id)
                                  else: st.session_state.expanded_task_updates.add(task.id)
                                  st.rerun()
-                    st.markdown('</div>', unsafe_allow_html=True)
                 
                 # --- INLINE EDIT FORM (RENDERIZADO LOGO ABAIXO DO CARD) ---
                 if st.session_state.get("editing_task_id") == task.id:
@@ -2901,16 +2899,19 @@ def load_custom_css() -> None:
         <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
         
-        /* FORÇAR MODO ESCURO GERAL (Resiliência contra tema Light) */
-        h1, h2, h3, h4, h5, h6, p, span, div, label {
+        /* FORÇAR MODO ESCURO GERAL (Targeted Elements ONLY) */
+        h1, h2, h3, h4, h5, h6, p, label {
             color: #f8fafc;
         }
         
-        .stTextInput input, .stTextArea textarea, .stSelectbox div[data-baseweb="select"] > div, .stDateInput input {
-            color: #f8fafc !important;
-            -webkit-text-fill-color: #f8fafc !important;
+        /* Ensure Inputs and Selectboxes are visible */
+        .stTextInput input, 
+        .stTextArea textarea, 
+        .stSelectbox div[data-baseweb="select"] > div, 
+        .stDateInput input {
+            color: #ffffff !important;
+            -webkit-text-fill-color: #ffffff !important;
             caret-color: #6366f1 !important;
-            background-color: transparent !important;
         }
 
         /* ==================================================================================
