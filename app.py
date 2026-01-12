@@ -118,6 +118,8 @@ class Task:
     due_date: str
     description: str = ""
     attachments: List[str] = field(default_factory=list)
+    collaborators: List[str] = field(default_factory=list)  # Colaboradores mencionados
+    manager_feedback: str = "" # Feedback da gestão
     id: int = field(default_factory=lambda: int(time.time() * 1000))
     created_at: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d"))
     
@@ -126,15 +128,52 @@ class Task:
             raise ValueError("Título é obrigatório")
         if isinstance(self.due_date, (datetime, date)):
             self.due_date = self.due_date.strftime("%Y-%m-%d")
+        # Garantir que collaborators seja uma lista
+        if self.collaborators is None:
+            self.collaborators = []
+        if isinstance(self.collaborators, str):
+            try:
+                import ast
+                self.collaborators = ast.literal_eval(self.collaborators) if self.collaborators else []
+            except:
+                self.collaborators = []
+        
+        # Sanitização preventiva dos dados
+        import re
+        import html
+        
+        def clean_val(text):
+            if not text: return ""
+            # Unescape e remover tags
+            txt = html.unescape(str(text))
+            txt = re.sub(r'<[^>]*>', '', txt)
+            return txt.strip()
+            
+        self.title = clean_val(self.title)
+        
+        if self.collaborators and isinstance(self.collaborators, list):
+             self.collaborators = [clean_val(c) for c in self.collaborators if clean_val(c)]
     
     def to_dict(self) -> dict:
         data = asdict(self)
         data["dueDate"] = data.pop("due_date")
         data["createdAt"] = data.pop("created_at")
+        # Converter lista de collaborators para string para salvar no Sheets
+        if "collaborators" in data and isinstance(data["collaborators"], list):
+            data["collaborators"] = str(data["collaborators"])
         return data
     
     @classmethod
     def from_dict(cls, data: dict) -> "Task":
+        # Converter collaborators de string para lista
+        collabs = data.get("collaborators", [])
+        if isinstance(collabs, str):
+            try:
+                import ast
+                collabs = ast.literal_eval(collabs) if collabs else []
+            except:
+                collabs = []
+        
         return cls(
             title=data.get("title", ""),
             responsible=data.get("responsible", "Maicon"),
@@ -144,8 +183,10 @@ class Task:
             due_date=data.get("dueDate", datetime.now().strftime("%Y-%m-%d")),
             description=data.get("description", ""),
             attachments=data.get("attachments", []),
+            collaborators=collabs,
             id=data.get("id", int(time.time() * 1000)),
             created_at=data.get("createdAt", datetime.now().strftime("%Y-%m-%d")),
+            manager_feedback=data.get("manager_feedback", "")
         )
     
     def is_urgent_today(self) -> bool:
@@ -190,6 +231,40 @@ class RequestRC:
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
+# Cache da conexão do Google Sheets (para evitar reconexões lentas)
+@st.cache_resource(ttl=600)  # Cache por 10 minutos
+def get_sheets_connection():
+    """Retorna a conexão cacheada com o Google Sheets"""
+    try:
+        if "gcp_service_account" not in st.secrets:
+            return None, None
+        
+        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+        service_account_info = st.secrets["gcp_service_account"]
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
+        gc = gspread.authorize(creds)
+        
+        sheet_name = st.secrets.get("SHEET_NAME", "FlowData")
+        try:
+            sh = gc.open(sheet_name)
+        except gspread.SpreadsheetNotFound:
+            sh = gc.create(sheet_name)
+            user_email = st.secrets.get("USER_EMAIL")
+            if user_email:
+                sh.share(user_email, perm_type='user', role='writer')
+        
+        return gc, sh
+    except Exception as e:
+        print(f"Erro ao conectar com Google Sheets: {e}")
+        return None, None
+
+# Helper function para obter o DataManager do session_state (singleton)
+def get_data_manager():
+    """Retorna o DataManager singleton do session_state"""
+    if "data_manager_instance" not in st.session_state:
+        st.session_state.data_manager_instance = DataManager()
+    return st.session_state.data_manager_instance
+
 # ==========================================
 # GERENCIADOR DE DADOS
 # ==========================================
@@ -215,44 +290,26 @@ class DataManager:
         if file_path:
             self.file_path = file_path
 
-        # Verificar se deve usar Google Sheets (apenas se secrets existirem)
+        # Usar conexão cacheada do Google Sheets (MUITO MAIS RÁPIDO!)
         self.use_sheets = False
-        self.sheet_key = None
         self.gc = None
+        self.sh = None
         
-        if "gcp_service_account" in st.secrets:
-            try:
-                self.use_sheets = True
-                self._connect_sheets()
-            except Exception as e:
-                print(f"Erro ao conectar com Google Sheets: {e}")
-                self.use_sheets = False # Fallback para local
+        gc, sh = get_sheets_connection()
+        if gc is not None and sh is not None:
+            self.use_sheets = True
+            self.gc = gc
+            self.sh = sh
     
     def _connect_sheets(self):
-        # Escopos necessários
-        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-        
-        # Criar credenciais a partir dos secrets
-        service_account_info = st.secrets["gcp_service_account"]
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
-        
-        # Autorizar
-        self.gc = gspread.authorize(creds)
-        
-        # Abrir planilha (busca pelo nome que deve estar nos secrets também, ou hardcoded 'FlowData')
-        sheet_name = st.secrets.get("SHEET_NAME", "FlowData")
-        try:
-            self.sh = self.gc.open(sheet_name)
-        except gspread.SpreadsheetNotFound:
-            # Tentar criar se não existir (se tiver permissão, senão erro)
-            try:
-                self.sh = self.gc.create(sheet_name)
-                # Compartilhar com o email do usuário se definido
-                user_email = st.secrets.get("USER_EMAIL")
-                if user_email:
-                    self.sh.share(user_email, perm_type='user', role='writer')
-            except:
-                raise Exception("Planilha não encontrada e erro ao criar.")
+        # Método mantido para compatibilidade, mas agora usa cache
+        gc, sh = get_sheets_connection()
+        if gc is not None:
+            self.gc = gc
+            self.sh = sh
+            self.use_sheets = True
+        else:
+            self.use_sheets = False
 
     def _get_worksheet(self, name: str):
         if not self.use_sheets: return None
@@ -297,6 +354,38 @@ class DataManager:
                 return json.load(f)
         except:
              return DEFAULT_CATEGORY_OPTIONS.copy() if is_admin else {}
+
+    def save_categories(self, categories: Dict) -> bool:
+        if self.use_sheets:
+            try:
+                ws = self._get_worksheet("Categories")
+                # Flatten dict to list of dicts for sheet
+                data = []
+                for key, val in categories.items():
+                    item = val.copy()
+                    item['key'] = key
+                    data.append(item)
+                
+                if data:
+                    ws.clear()
+                    ws.append_row(list(data[0].keys()))
+                    rows = [list(d.values()) for d in data]
+                    ws.append_rows(rows)
+                else:
+                    ws.clear()
+                return True
+            except Exception as e:
+                st.error(f"Erro ao salvar categorias na nuvem: {e}")
+                return False
+
+        # Local
+        try:
+            with open(self.categories_path, "w", encoding="utf-8") as f:
+                json.dump(categories, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception as e:
+            st.error(f"Erro ao salvar categorias localmente: {e}")
+            return False
 
     # ---- Requisições (RC/PO) ----
     def load_requests(self) -> List[RequestRC]:
@@ -539,6 +628,7 @@ def load_gestores_data():
         return pd.DataFrame()
     return pd.read_excel(GESTORES_FILE)
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def buscar_colaborador_por_matricula(matricula: str) -> Dict:
     """Busca dados do colaborador no arquivo gestores.xlsx pela matrícula."""
     if not matricula or not matricula.strip():
@@ -1055,7 +1145,7 @@ class BoardsView:
         if "expanded_task_updates" not in st.session_state:
             st.session_state.expanded_task_updates = set()
         
-        dm = DataManager()
+        dm = st.session_state.data_manager
         
         # CSS Refinado: Moderno, Compacto e Minimalista + Cards
         st.markdown(
@@ -1161,13 +1251,45 @@ class BoardsView:
         )
 
     @classmethod
+    @staticmethod
+    def _clean_html(text: str) -> str:
+        if not text: return ""
+        import html
+        import re
+        
+        # 1. Converter entities para caracteres reais (&lt; -> <) para o regex funcionar
+        clean = html.unescape(str(text))
+        
+        # 2. Remover tags HTML específicas que costumam dar problema (case insensitive)
+        # Remove divs, spans, p, br com qualquer atributo
+        patterns = [
+            r'</?div[^>]*>', 
+            r'</?span[^>]*>', 
+            r'</?p[^>]*>', 
+            r'<br\s*/?>'
+        ]
+        for pattern in patterns:
+            clean = re.sub(pattern, '', clean, flags=re.IGNORECASE)
+        
+        # 3. Remover qualquer outra tag HTML remanescente
+        clean = re.sub(r'<[^>]*>', '', clean)
+        
+        # 4. Limpar espaços extras
+        return re.sub(r'\s+', ' ', clean).strip()
+
+    @classmethod
     def _process_description(cls, task: Task, info: Dict) -> str:
         if not task.description:
             return ""
         
+        desc_clean = cls._clean_html(task.description)
+        
+        if not desc_clean:
+            return ""
+        
         # Lógica para DADOS DO COLABORADOR e ATENDIMENTO
-        if "DADOS DO COLABORADOR" in task.description or "DADOS DO ATENDIMENTO" in task.description:
-            lines = task.description.split('\n')
+        if "DADOS DO COLABORADOR" in desc_clean or "DADOS DO ATENDIMENTO" in desc_clean:
+            lines = desc_clean.split('\n')
             current_section = None
             section_buffer = []
 
@@ -1177,12 +1299,12 @@ class BoardsView:
                 if section_name:
                     header = f"<div style='font-size:0.75rem;color:{color};font-weight:800;margin-bottom:4px;text-transform:uppercase;'>{section_name}</div>"
                 
-                html = header
-                html += "<div style='display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;'>"
+                html_out = header
+                html_out += "<div style='display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;'>"
                 for item in buffer:
-                    html += f"<span style='background:rgba(226, 232, 240, 0.1);padding:4px 10px;border-radius:6px;font-size:0.75rem;color:#f8fafc;border:1px solid rgba(255,255,255,0.1);'>{item}</span>"
-                html += "</div>"
-                return html
+                    html_out += f"<span style='background:rgba(226, 232, 240, 0.1);padding:4px 10px;border-radius:6px;font-size:0.75rem;color:#f8fafc;border:1px solid rgba(255,255,255,0.1);'>{item}</span>"
+                html_out += "</div>"
+                return html_out
 
             final_html = ""
             for line in lines:
@@ -1204,7 +1326,10 @@ class BoardsView:
             final_html += flush_buffer(section_buffer, current_section, info['color'])
             return f"<div style='background:rgba(148, 163, 184, 0.1); padding:16px; border-radius:12px; margin-bottom:12px; border:1px solid rgba(255,255,255,0.08);'>{final_html}</div>"
         
-        return f"<div style='background:rgba(148, 163, 184, 0.12); padding:12px; border-radius:8px; margin-bottom:12px; border:1px solid rgba(255,255,255,0.1);'><div style=\"color:#f8fafc;font-size:0.85rem;line-height:1.4;\">{task.description}</div></div>"
+        # Escapar HTML na descrição normal para evitar quebras
+        import html
+        desc_escaped = html.escape(desc_clean)
+        return f"<div style='background:rgba(148, 163, 184, 0.12); padding:12px; border-radius:8px; margin-bottom:12px; border:1px solid rgba(255,255,255,0.1);'><div style=\"color:#f8fafc;font-size:0.85rem;line-height:1.4;\">{desc_escaped}</div></div>"
 
     @classmethod
     def render(cls, tasks: List[Task]) -> None:
@@ -1219,7 +1344,7 @@ class BoardsView:
         if "expanded_task_updates" not in st.session_state:
             st.session_state.expanded_task_updates = set()
         
-        dm = DataManager()
+        dm = st.session_state.data_manager
         
         # Filtros e Agrupamento
         grouped: Dict[str, Dict] = {}
@@ -1243,14 +1368,14 @@ class BoardsView:
                     <div class="monday-group-header" style="background:{info['bg']};border-left:4px solid {info['color']};">
                         <div style="display:flex;align-items:center;gap:12px;">
                             <span style="font-size:1.3rem;">{info['icon']}</span>
-                            <span style="color:{info['color']};font-weight:700;font-size:1rem;text-transform:uppercase;letter-spacing:0.5px;">
+                            <span style="background:{info['color']};color:#ffffff;font-weight:800;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.5px;padding:4px 12px;border-radius:6px;">
                                 {cat_name}
                             </span>
-                            <span style="color:#9699a6;font-size:0.85rem;">
+                            <span style="color:#cbd5e1;font-size:0.85rem;">
                                 {total} atividades
                             </span>
                         </div>
-                        <div style="color:#9699a6;font-size:0.85rem;">
+                        <div style="color:#cbd5e1;font-size:0.85rem;">
                             {done}/{total} concluídas
                         </div>
                     </div>
@@ -1266,19 +1391,48 @@ class BoardsView:
                 # Container do Card usando o componente nativo do Streamlit para agrupar widgets
                 with st.container(border=True):
                     # Container Colorido (Tema Suave) - Ajustado para cobrir o topo do card
+                    # Montar string de colaboradores se houver (filtrar listas vazias)
+                    collabs_html = ""
+                    task_collabs = getattr(task, 'collaborators', None)
+                    
+                    # Tratar caso onde collaborators é uma string "[]" ou similar
+                    if isinstance(task_collabs, str):
+                        try:
+                            import ast
+                            # Usar literal_eval é mais seguro e robusto para listas simples
+                            task_collabs = ast.literal_eval(task_collabs) if task_collabs else []
+                            if not isinstance(task_collabs, list): task_collabs = []
+                        except:
+                            task_collabs = []
+                    
+                    if task_collabs and isinstance(task_collabs, list) and len(task_collabs) > 0:
+                        # Filtrar strings vazias e LIMPAR HTML de cada nome
+                        valid_collabs = []
+                        for c in task_collabs:
+                            c_clean = cls._clean_html(str(c))
+                            if c_clean and c_clean != '[]':
+                                valid_collabs.append(c_clean)
+                        
+                        if valid_collabs:
+                            collabs_str = ", ".join(valid_collabs)
+                            collabs_html = f'<div style="color:#94a3b8;font-size:0.75rem;margin-top:6px;"><span style="color:#a78bfa;">👥</span> Com: {collabs_str}</div>'
+                    
+                    # Sanitizar título (remover HTML que possa ter sido salvo incorretamente)
+                    import html as html_module
+                    safe_title = cls._clean_html(task.title)
+                    safe_title = html_module.escape(safe_title)
+                    
                     st.markdown(
-                        f"""
-                        <div style="background: {info['color']}18; padding: 20px; border-radius: 12px 12px 0 0; margin: -1.05rem -1.05rem 15px -1.05rem; border-bottom: 1px solid {info['color']}22;">
-                            <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:8px;">
-                                <span style="font-size:2rem;">{info['icon']}</span>
-                                <div style="flex:1;">
-                                    <div style="color:{info['color']};font-size:0.75rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:2px;">
-                                        {info['name']}
-                                    </div>
-                                    <div style="color:white;font-size:1.1rem;font-weight:700;line-height:1.2;">{task.title}</div>
-                                </div>
-                            </div>
-                        """,
+                        f"""<div style="margin-bottom:10px;">
+<div style="display:flex;align-items:flex-start;gap:12px;">
+<span style="font-size:1.5rem;line-height:1;">{info['icon']}</span>
+<div style="flex:1;">
+<div style="color:{info['color']};font-size:0.75rem;font-weight:800;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">{info['name']}</div>
+<div style="color:var(--text-main);font-size:1.1rem;font-weight:700;line-height:1.2;">{safe_title}</div>
+{collabs_html}
+</div>
+</div>
+</div>""",
                         unsafe_allow_html=True
                     )
 
@@ -1286,8 +1440,6 @@ class BoardsView:
                     if task.description:
                         desc_html = cls._process_description(task, info)
                         st.markdown(desc_html, unsafe_allow_html=True)
-                    
-                    st.markdown("</div>", unsafe_allow_html=True)
                     
                     if not task.description:
                          st.markdown("<div style='margin-bottom:12px;'></div>", unsafe_allow_html=True)
@@ -1306,14 +1458,14 @@ class BoardsView:
                         new_status = st.selectbox("Status", list(STATUS_CONFIG.keys()), index=list(STATUS_CONFIG.keys()).index(task.status), key=f"st_{task.id}", label_visibility="collapsed")
                         if new_status != task.status:
                             task.status = new_status
-                            DataManager().save_tasks(st.session_state.tasks)
+                            st.session_state.data_manager.save_tasks(st.session_state.tasks)
                             st.rerun()
 
                     with c_prio:
                         new_prio = st.selectbox("Prioridade", list(PRIORITY_CONFIG.keys()), index=list(PRIORITY_CONFIG.keys()).index(task.priority), key=f"pr_{task.id}", label_visibility="collapsed")
                         if new_prio != task.priority:
                             task.priority = new_prio
-                            DataManager().save_tasks(st.session_state.tasks)
+                            st.session_state.data_manager.save_tasks(st.session_state.tasks)
                             st.rerun()
 
                     with c_acts:
@@ -1321,7 +1473,7 @@ class BoardsView:
                          with col_del:
                              if st.button("🗑️", key=f"del_{task.id}", help="Excluir", use_container_width=True):
                                  st.session_state.tasks = [t for t in st.session_state.tasks if t.id != task.id]
-                                 DataManager().save_tasks(st.session_state.tasks)
+                                 st.session_state.data_manager.save_tasks(st.session_state.tasks)
                                  st.rerun()
                          with col_edit:
                              if st.button("✏️", key=f"edit_btn_{task.id}", help="Editar Cadastro", use_container_width=True):
@@ -1631,7 +1783,7 @@ class KanbanView:
                     reverse=True
                 )
                 
-                # Construir HTML total da coluna para evitar tags órfãs
+                # Construir HTML total da coluna para evitar problemas de estrutura
                 column_html = textwrap.dedent(f"""
                     <div style="background: rgba(30, 41, 59, 0.4); border-radius: 16px; padding: 16px; min-height: 80vh; border: 1px solid rgba(255,255,255,0.03);">
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; padding: 0 4px;">
@@ -1658,18 +1810,18 @@ class KanbanView:
                     column_html += textwrap.dedent(f"""
                         <div style="background: linear-gradient(135deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%); 
                                     border: 1px solid rgba(255,255,255,0.07); border-radius: 12px; padding: 14px; margin-bottom:12px; 
-                                    box-shadow: 0 4px 15px rgba(0,0,0,0.1); border-left: 4px solid {info['color']};" class="kanban-card-hover">
+                                    box-shadow: 0 4px 15px rgba(0,0,0,0.1); border-left: 4px solid {info['color']};">
                             <div style="display:flex; justify-content:space-between; margin-bottom:10px;">
-                                <span style="font-size:0.6rem; color:{info['color']}; font-weight:800; text-transform:uppercase; letter-spacing:0.5px;">{info['name']}</span>
-                                <div style="display:flex; align-items:center; gap:4px; background:{pc['color']}15; padding:2px 8px; border-radius:4px; border:1px solid {pc['color']}30;">
+                                <span style="font-size:0.65rem; color:#ffffff; font-weight:800; text-transform:uppercase; letter-spacing:0.5px; background:{info['color']}; padding:2px 8px; border-radius:4px;">{info['name']}</span>
+                                <div style="display:flex; align-items:center; gap:4px; background:{pc['color']}20; padding:2px 8px; border-radius:4px; border:1px solid {pc['color']}40;">
                                     <div style="width:6px; height:6px; background:{pc['color']}; border-radius:50%;"></div>
                                     <span style="font-size:0.6rem; color:{pc['color']}; font-weight:700;">{t.priority}</span>
                                 </div>
                             </div>
                             <div style="color:#f8fafc; font-size:0.85rem; font-weight:600; line-height:1.4; margin-bottom:14px; min-height:2.4em;">{t.title}</div>
-                            <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid rgba(255,255,255,0.05); padding-top:10px; opacity:0.7;">
-                                <span style="font-size:0.7rem; color:#94a3b8; font-weight:600;">📅 {due}</span>
-                                <span style="font-size:0.7rem; color:#94a3b8; font-weight:600;">👤 {t.responsible.split()[0]}</span>
+                            <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid rgba(255,255,255,0.05); padding-top:10px;">
+                                <span style="font-size:0.7rem; color:#cbd5e1; font-weight:600;">📅 {due}</span>
+                                <span style="font-size:0.7rem; color:#cbd5e1; font-weight:600;">👤 {t.responsible.split()[0]}</span>
                             </div>
                         </div>
                     """)
@@ -1687,7 +1839,7 @@ class RequestsView:
         is_manager = user_id in ["GESTAO", "2484901", "2949400"]
         
         reqs = st.session_state.get("requests", [])
-        dm = DataManager()
+        dm = st.session_state.data_manager
         
         # Título Dinâmico
         header_title = "📑 Minhas Requisições (RC/PO)" if not is_manager else "📑 Gestão Global de Requisições (RC/PO)"
@@ -2084,6 +2236,35 @@ class FollowUpView:
                     html += "</div></div>"
                     
                     st.markdown(html, unsafe_allow_html=True)
+                    
+                    # --- FEEDBACK DA GESTÃO (SISTEMA DE NOTIFICAÇÃO) ---
+                    # 1. Exibir Feedback (Para todos)
+                    if getattr(t, "manager_feedback", ""):
+                         st.markdown(f"""
+                         <div style="background: rgba(250, 204, 21, 0.1); border-left: 3px solid #facc15; padding: 8px 12px; margin: -4px 0 8px 20px; border-radius: 0 0 6px 6px;">
+                             <span style="color: #facc15; font-size: 0.8rem; font-weight: 600;">🔔 Mensagem da Gestão:</span>
+                             <span style="color: #e2e8f0; font-size: 0.8rem; font-style: italic;">"{t.manager_feedback}"</span>
+                         </div>
+                         """, unsafe_allow_html=True)
+
+                    # 2. Área de Edição (Apenas Gestores)
+                    current_matricula = st.session_state.get("current_user", "")
+                    is_manager_role = current_matricula in ["2949400", "2484901", "GESTAO"]
+                    
+                    if is_manager_role:
+                         with st.expander("🗨️ Adicionar Notificação / Feedback", expanded=False):
+                              curr_val = getattr(t, "manager_feedback", "")
+                              new_feed = st.text_area("Mensagem para o analista", value=curr_val, key=f"feed_{t.id}", height=70, placeholder="Ex: Priorizar esta entrega...")
+                              if st.button("💾 Salvar Notificação", key=f"save_feed_{t.id}", use_container_width=True):
+                                   t.manager_feedback = new_feed
+                                   # Encontrar a tarefa real no session_state para salvar (pois 't' é uma cópia da lista local)
+                                   real_t = next((x for x in st.session_state.tasks if x.id == t.id), None)
+                                   if real_t:
+                                       real_t.manager_feedback = new_feed
+                                       st.session_state.data_manager.save_tasks(st.session_state.tasks)
+                                       st.toast("Feedback salvo com sucesso!")
+                                       time.sleep(1)
+                                       st.rerun()
             else:
                 st.success("🎉 Nenhuma tarefa atrasada ou crítica!")
         
@@ -2209,7 +2390,7 @@ class UpdatesModal:
             del st.session_state.show_updates_for_task
             return
         
-        dm = DataManager()
+        dm = st.session_state.data_manager
         updates = sorted(dm.get_task_updates(task_id), key=lambda u: u.timestamp, reverse=True)
         
         with st.expander(f"💬 Updates • {task.title}", expanded=True):
@@ -2282,6 +2463,10 @@ class NewTaskModal:
                 elif owner is None and current_mat == "2949400": # Maicon vê legacy
                     allowed_keys.append(k)
             
+            # Se não há categorias para o usuário, allowed_keys permanece vazio.
+            # Isso impede que usuários sem categorias vejam as de outros.
+            # O sistema abaixo já lida com "options" vazio mostrando aviso.
+            
             options = allowed_keys
             
             # Adicionar opção de "Atendimento" separadamente
@@ -2295,16 +2480,23 @@ class NewTaskModal:
             is_atendimento = tipo_atividade == "👥 Atendimento de Pessoa"
             
             if not is_atendimento:
-                c_cat, c_btn = st.columns([0.88, 0.12])
-                with c_cat:
-                    sel = st.selectbox("📂 Tema / Quadro", options, key="new_task_category")
-                with c_btn:
-                    st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
-                    if st.button("➕", help="Gerenciar Categorias", key="btn_new_cat_modal", use_container_width=True):
-                        st.session_state.show_category_modal = True
-                        st.rerun()
-                
-                cat_name = CATEGORY_OPTIONS[sel]["name"]
+                if options:
+                    c_cat, c_btn = st.columns([0.88, 0.12])
+                    with c_cat:
+                        sel = st.selectbox("📂 Tema / Quadro", options, key="new_task_category")
+                    with c_btn:
+                        st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
+                        if st.button("➕", help="Gerenciar Categorias", key="btn_new_cat_modal", use_container_width=True):
+                            st.session_state.show_category_modal = True
+                            st.rerun()
+                    
+                    cat_name = CATEGORY_OPTIONS[sel]["name"] if sel else "Outros"
+                else:
+                    st.warning("⚠️ Nenhuma categoria disponível. Crie uma categoria primeiro.")
+                    if st.button("➕ Criar Nova Categoria", key="btn_create_first_cat", type="primary"):
+                         st.session_state.show_category_modal = True
+                         st.rerun()
+                    cat_name = "Outros"
             else:
                 cat_name = "Pessoas/Atendimentos"
             
@@ -2428,6 +2620,39 @@ class NewTaskModal:
                 with c3:
                     due_date = st.date_input("📅 Prazo", format="DD/MM/YYYY")
                 
+                # Seleção de Colaboradores (Atividade Compartilhada)
+                # Seleção de Colaboradores (Atividade Compartilhada)
+                # Lista fixa da equipe com Fallback (Garante que nomes apareçam mesmo se Excel falhar ou cache estiver velho)
+                core_team_map = {
+                    "2949400": "Maicon",
+                    "2858700": "Kherolainy",
+                    "2791900": "Maria",
+                    "2944000": "Davi"
+                }
+
+                core_names = []
+                for mid, default_name in core_team_map.items():
+                    d = buscar_colaborador_por_matricula(mid)
+                    if d.get("nome"):
+                        # Usar primeiro nome com Title Case
+                        name = d.get("nome").split()[0].title()
+                    else:
+                        name = default_name
+                    core_names.append(name)
+                
+                # Combinar com nomes já existentes nas tarefas para manter histórico
+                existing_names = [t.responsible.title().strip() for t in st.session_state.tasks if t.responsible]
+                
+                # Lista final Unificada e Ordenada
+                all_analysts = sorted(list(set(core_names + existing_names)))
+                
+                selected_collaborators = st.multiselect(
+                    "👥 Colaboradores (opcional)",
+                    all_analysts,
+                    help="Selecione outros analistas que participam desta atividade. A tarefa aparecerá para eles também.",
+                    placeholder="Selecione colaboradores..."
+                )
+                
                 c_s, c_c = st.columns(2)
                 with c_s:
                     submitted = st.form_submit_button("✅ Criar", type="primary", use_container_width=True)
@@ -2527,10 +2752,11 @@ class NewTaskModal:
                                 status="Pendente",
                                 due_date=due_date.strftime("%Y-%m-%d"),
                                 description=desc_final,
-                                attachments=saved_attachments
+                                attachments=saved_attachments,
+                                collaborators=selected_collaborators  # Colaboradores mencionados
                             )
                             st.session_state.tasks.append(t)
-                            DataManager().save_tasks(st.session_state.tasks)
+                            st.session_state.data_manager.save_tasks(st.session_state.tasks)
                             st.success("Atividade criada.")
                             st.session_state.show_modal = False
                             st.session_state.colaborador_dados = {}  # Limpar dados
@@ -2538,17 +2764,75 @@ class NewTaskModal:
                             st.rerun()
                         except Exception as e:
                             st.error(f"Erro: {e}")
-                if cancel:
-                    st.session_state.show_modal = False
-                    st.session_state.colaborador_dados = {}  # Limpar dados
-                    st.rerun()
+                    if cancel:
+                        st.session_state.show_modal = False
+                        st.session_state.colaborador_dados = {}  # Limpar dados
+                        st.rerun()
+
+class EditTaskModal:
+    @staticmethod
+    def render() -> None:
+        editing_id = st.session_state.get("editing_task_id")
+        if not editing_id:
+            return
+
+        task_to_edit = next((t for t in st.session_state.tasks if t.id == editing_id), None)
+        if not task_to_edit:
+            st.session_state.editing_task_id = None
+            return
+
+        with st.expander("✏️ Editar Atividade", expanded=True):
+            # Adicionar funcionalidade de anexos também
+            
+            with st.form("form_edit_task"):
+                e_title = st.text_input("Título", value=task_to_edit.title)
+                e_desc = st.text_area("Descrição", value=task_to_edit.description, height=150)
+                
+                # Layout colunas
+                ec1, ec2, ec3 = st.columns([0.3, 0.3, 0.4])
+                with ec1:
+                    e_prio = st.selectbox("Prioridade", list(PRIORITY_CONFIG.keys()), index=list(PRIORITY_CONFIG.keys()).index(task_to_edit.priority))
+                with ec2:
+                    current_due = datetime.strptime(task_to_edit.due_date, "%Y-%m-%d")
+                    e_due = st.date_input("Prazo", value=current_due, format="DD/MM/YYYY")
+                
+                # Collaborators (Allow changing here too?) - Simplificação: Manter original
+                # Se o usuário quiser mudar colaboradores, por enquanto não está no form original.
+                
+                # Checkbox para Concluir rápido
+                e_status_done = st.checkbox("✅ Marcar como Concluída", value=(task_to_edit.status == "Concluído"))
+                
+                ec_b1, ec_b2 = st.columns(2)
+                with ec_b1:
+                    if st.form_submit_button("💾 Salvar Alterações", type="primary", use_container_width=True):
+                        task_to_edit.title = e_title
+                        task_to_edit.description = e_desc
+                        task_to_edit.priority = e_prio
+                        task_to_edit.due_date = e_due.strftime("%Y-%m-%d")
+                        
+                        if e_status_done and task_to_edit.status != "Concluído":
+                            task_to_edit.status = "Concluído"
+                        elif not e_status_done and task_to_edit.status == "Concluído":
+                                task_to_edit.status = "Em Andamento" # Reverter
+                        
+                        dm = st.session_state.data_manager
+                        dm.save_tasks(st.session_state.tasks)
+                        st.session_state.editing_task_id = None
+                        st.balloons()
+                        st.success("Alterações salvas!")
+                        time.sleep(0.5)
+                        st.rerun()
+                with ec_b2:
+                    if st.form_submit_button("❌ Cancelar", use_container_width=True):
+                        st.session_state.editing_task_id = None
+                        st.rerun()
 
 # ==========================================
 # CSS
 # ==========================================
 
-def load_custom_css() -> None:
-    # Configuração do Fundo (Imagem ou Gradiente)
+@st.cache_data(show_spinner=False)
+def get_background_style_css() -> str:
     bg_style = "background: radial-gradient(circle at top right, #1e1b4b, #0f172a) !important;"
     if os.path.exists("Fundo.png"):
         try:
@@ -2563,6 +2847,11 @@ def load_custom_css() -> None:
             '''
         except Exception:
             pass
+    return bg_style
+
+def load_custom_css() -> None:
+    # Configuração do Fundo (Cacheado)
+    bg_style = get_background_style_css()
 
     st.markdown(
         """
@@ -2977,54 +3266,217 @@ def load_custom_css() -> None:
 # ==========================================
 
 def login_page():
-    # Layout de Login Centralizado
-    c1, c2, c3 = st.columns([1, 2, 1])
+    # CSS Ultra Moderno (Glassmorphism + Animated UI + Video Effect Background)
+    st.markdown(
+        """
+        <style>
+        /* Background Animado (Efeito Video) */
+        @keyframes gradientBG {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        .stApp {
+            background: linear-gradient(-45deg, #020617, #312e81, #4c1d95, #020617);
+            background-size: 400% 400%;
+            animation: gradientBG 20s ease infinite;
+        }
+
+        /* Centralizar verticalmente toda a página */
+        [data-testid="stAppViewContainer"] > .main {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        
+        /* Animação de Entrada do Card */
+        @keyframes slideUpFade {
+            from { opacity: 0; transform: translateY(30px) scale(0.98); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        /* Estilo do Card (Formulário) */
+        [data-testid="stForm"] {
+            width: 100%;
+            background: rgba(15, 23, 42, 0.6) !important; /* Mais escuro e profundo */
+            backdrop-filter: blur(24px) !important;
+            -webkit-backdrop-filter: blur(24px) !important;
+            border: 1px solid rgba(255, 255, 255, 0.08) !important;
+            padding: 48px 40px !important;
+            border-radius: 28px !important;
+            box-shadow: 
+                0 0 0 1px rgba(255, 255, 255, 0.05),
+                0 20px 50px -10px rgba(0, 0, 0, 0.7) !important;
+            animation: slideUpFade 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+        
+        /* Typography */
+        .login-header-icon {
+            font-size: 3.5rem;
+            text-align: center;
+            margin-bottom: 1rem;
+            filter: drop-shadow(0 0 20px rgba(99, 102, 241, 0.3));
+        }
+        .login-subtitle-modern {
+            background: linear-gradient(90deg, #cbd5e1, #ffffff, #cbd5e1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-size: 0.85rem;
+            font-weight: 800;
+            letter-spacing: 4px;
+            text-transform: uppercase;
+            margin: 0;
+            opacity: 1;
+            text-align: center;
+            text-shadow: 0 2px 10px rgba(255,255,255,0.1);
+        }
+        
+        .login-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: radial-gradient(circle at top left, rgba(255,255,255,0.15), rgba(255,255,255,0.05));
+            padding: 20px 35px;
+            border-radius: 20px;
+            border: 1px solid rgba(255,255,255,0.15);
+            box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            margin-bottom: 20px;
+        }
+        
+        .login-badge-icon {
+            font-size: 2.2rem; 
+            margin-right: 12px; 
+            filter: grayscale(1);
+        }
+        
+        .login-badge-title {
+            font-family: 'Inter', system-ui, sans-serif;
+            font-weight: 900;
+            font-size: 3.2rem;
+            color: #ffffff;
+            margin: 0;
+            letter-spacing: 1px;
+            text-shadow: 0 2px 15px rgba(255,255,255,0.4);
+            line-height: 1;
+        }
+
+        /* Estilizar Campos de Texto (Inputs) */
+        /* Streamlit injeta divs wrap, vamos tentar pegar inputs genéricos dentro do form */
+        div[data-testid="stForm"] input {
+            background: rgba(0, 0, 0, 0.2) !important;
+            border: 1px solid rgba(255, 255, 255, 0.1) !important;
+            color: white !important;
+            padding: 12px 16px !important;
+            border-radius: 12px !important;
+            font-size: 0.95rem !important;
+            transition: all 0.3s ease;
+        }
+        div[data-testid="stForm"] input:focus {
+            border-color: #6366f1 !important;
+            box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.15) !important;
+            background: rgba(0, 0, 0, 0.35) !important;
+        }
+
+        /* Botão com Gradiente Moderno */
+        div[data-testid="stFormSubmitButton"] button {
+            background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%) !important;
+            border: none !important;
+            color: white !important;
+            font-weight: 700 !important;
+            padding: 0.75rem 1.5rem !important;
+            border-radius: 14px !important;
+            font-size: 1rem !important;
+            letter-spacing: 0.5px !important;
+            transition: all 0.3s ease !important;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06) !important;
+        }
+        div[data-testid="stFormSubmitButton"] button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 30px -8px rgba(99, 102, 241, 0.6) !important;
+            filter: brightness(1.1);
+        }
+        div[data-testid="stFormSubmitButton"] button:active {
+            transform: translateY(0);
+        }
+        </style>
+        """, 
+        unsafe_allow_html=True
+    )
+
+    # Centralização Horizontal
+    col1, col2, col3 = st.columns([1, 1, 1])
     
-    with c2:
-        st.markdown("<br>" * 5, unsafe_allow_html=True)  # Espaçamento vertical
-        with st.container(border=True):
+    with col2:
+        with st.form("login_form"):
             st.markdown(
-                """
-                <div style='text-align: center; margin-bottom: 20px;'>
-                    <h1 style='font-size: 2rem; margin-bottom: 0;'>🔐</h1>
-                    <h2 style='color: #f8fafc; margin-top: 10px;'>Acesso Restrito</h2>
-                    <p style='color: #94a3b8; font-size: 0.9rem;'>Área exclusiva para Gestão</p>
-                </div>
-                """, 
+"""<div style="text-align: center; margin-bottom: 40px;">
+    <h1 style="
+        font-family: 'Inter', sans-serif;
+        font-weight: 900;
+        font-size: 5rem;
+        background: linear-gradient(180deg, #ffffff 0%, #64748b 150%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin: 0;
+        letter-spacing: -4px;
+        line-height: 0.9;
+        filter: drop-shadow(0 0 40px rgba(99, 102, 241, 0.4));
+    ">DHO</h1>
+    <div style="
+        height: 6px;
+        width: 60px;
+        background: #6366f1;
+        margin: 10px auto 20px auto;
+        border-radius: 10px;
+    "></div>
+    <div style="
+        color: #94a3b8;
+        font-size: 0.9rem;
+        font-weight: 600;
+        letter-spacing: 3px;
+        text-transform: uppercase;
+    ">Gestão Estratégica</div>
+</div>""", 
                 unsafe_allow_html=True
             )
             
-            with st.form("login_form", border=False):
-                matricula = st.text_input("Matrícula", placeholder="Digite sua matrícula")
-                senha = st.text_input("Senha", type="password", placeholder="Digite sua senha")
+            # Inputs estilizados
+            matricula = st.text_input("Matrícula", placeholder="ID Corporativo", label_visibility="collapsed")
+            senha = st.text_input("Senha", type="password", placeholder="Senha de Acesso", label_visibility="collapsed")
+            
+            st.markdown("<div style='margin-bottom: 32px;'></div>", unsafe_allow_html=True)
+            
+            submit = st.form_submit_button("ENTRAR", type="primary", use_container_width=True)
+
+            if submit:
+                # Lista de usuários autorizados
+                CREDENTIALS = {
+                    "2949400": "Cocal@2025",  # Maicon
+                    "2858700": "Cocal@2025",  # Analista 1
+                    "2791900": "Cocal@2025",  # Analista 2
+                    "2944000": "Cocal@2025",  # Analista 3
+                    "2484901": "gestao@2025"  # Gestora
+                }
                 
-                st.markdown("<br>", unsafe_allow_html=True)
+                mat = matricula.strip()
+                is_manager_direct = (mat.lower() == "gestao" and senha == "gestao")
                 
-                if st.form_submit_button("ACESSAR SISTEMA", type="primary", use_container_width=True):
-                    # Lista de usuários autorizados
-                    CREDENTIALS = {
-                        "2949400": "Cocal@2025",
-                        "2858700": "Cocal@2025",
-                        "2484901": "gestao@2025"
-                    }
+                if is_manager_direct or (mat in CREDENTIALS and senha == CREDENTIALS[mat]):
+                    st.session_state.authenticated = True
+                    st.session_state.current_user = "GESTAO" if is_manager_direct else mat
+                    # Reset state
+                    for key in ["tasks", "categories", "selected_tasks", "colaborador_dados"]:
+                        if key in st.session_state: del st.session_state[key]
                     
-                    mat = matricula.strip()
-                    is_manager_direct = (mat.lower() == "gestao" and senha == "gestao")
-                    
-                    if is_manager_direct or (mat in CREDENTIALS and senha == CREDENTIALS[mat]):
-                        st.session_state.authenticated = True
-                        st.session_state.current_user = "GESTAO" if is_manager_direct else mat
-                        
-                        # Garantir recarregamento total dos dados (Zerar Session State anterior)
-                        for key in ["tasks", "categories", "selected_tasks", "colaborador_dados"]:
-                            if key in st.session_state:
-                                del st.session_state[key]
-                            
-                        st.toast("Login realizado com sucesso!", icon="✅")
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.error("Acesso negado. Credenciais inválidas.")
+                    st.toast("Login realizado com sucesso!", icon="✅")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error("Credenciais inválidas.")
 
 # ==========================================
 # APP
@@ -3077,7 +3529,7 @@ def manage_categories_dialog():
                             "bg": color + "22",
                             "owner": current_user # Salvar o dono
                         }
-                        DataManager().save_categories(cats)
+                        st.session_state.data_manager.save_categories(cats)
                         st.session_state.categories = cats
                         st.success("OK")
                         time.sleep(0.5)
@@ -3086,7 +3538,27 @@ def manage_categories_dialog():
     st.markdown("###### Categorias Existentes")
     
     # List and Delete
-    for key, val in list(cats.items()):
+    # Filtrar apenas categorias que o usuário pode ver/gerenciar
+    visible_cats = []
+    for key, val in cats.items():
+        cat_owner = val.get("owner")
+        
+        # Regra: Admin vê tudo, Analista vê só as suas
+        should_show = False
+        if is_admin:
+            should_show = True
+        elif cat_owner == current_user:
+            should_show = True
+        elif cat_owner is None and current_user == "2949400": # Legacy Maicon
+            should_show = True
+            
+        if should_show:
+            visible_cats.append((key, val))
+    
+    if not visible_cats:
+        st.info("Você não possui categorias personalizadas.")
+    
+    for key, val in visible_cats:
         c1, c2 = st.columns([0.85, 0.15])
         with c1:
             st.markdown(f"<div style='background:{val.get('bg', '#333')}; padding: 8px; border-radius: 8px; border-left: 4px solid {val['color']}'>{val['icon']} {val['name']}</div>", unsafe_allow_html=True)
@@ -3099,7 +3571,7 @@ def manage_categories_dialog():
             if can_delete:
                 if st.button("🗑️", key=f"del_{key}"): 
                     del cats[key]
-                    DataManager().save_categories(cats)
+                    st.session_state.data_manager.save_categories(cats)
                     st.session_state.categories = cats
                     st.rerun()
             else:
@@ -3132,7 +3604,27 @@ class ManagerDashboardView:
         )
 
         # 1. Filtros Avançados (Conforme Ideia do Usuário)
-        analysts = sorted(list(set([t.responsible for t in tasks if t.responsible])))
+        # Lista fixa da equipe com Fallback (Garante que nomes apareçam mesmo se Excel falhar ou cache estiver velho)
+        core_team_map = {
+            "2949400": "Maicon",
+            "2858700": "Kherolainy",
+            "2791900": "Maria",
+            "2944000": "Davi"
+        }
+        
+        core_names = []
+        for mid, default_name in core_team_map.items():
+            d = buscar_colaborador_por_matricula(mid)
+            if d.get("nome"):
+                 # Usar primeiro nome com Title Case
+                 name = d.get("nome").split()[0].title()
+            else:
+                 name = default_name
+            core_names.append(name)
+        
+        # Combinar com nomes já existentes nas tarefas (Normalizado para Title Case para evitar duplicatas MAICON vs Maicon)
+        task_names = [t.responsible.strip().title() for t in tasks if t.responsible]
+        analysts = sorted(list(set(core_names + task_names)))
         
         with st.container(border=True):
             st.markdown("###### 🔍 Refinar Busca Estratégica")
@@ -3142,7 +3634,8 @@ class ManagerDashboardView:
             
             # Base de dados para os próximos filtros
             if sel_analysts:
-                sub_tasks = [t for t in tasks if t.responsible in sel_analysts]
+                # Normalizar responsável para filtrar corretamente as opções dependentes
+                sub_tasks = [t for t in tasks if t.responsible.strip().title() in sel_analysts]
             else:
                 sub_tasks = tasks
 
@@ -3168,12 +3661,9 @@ class ManagerDashboardView:
         if sel_priorities:
             view_tasks = [t for t in view_tasks if t.priority in sel_priorities]
         if sel_analysts:
-            view_tasks = [t for t in view_tasks if t.responsible in sel_analysts]
+            # Filtro Normalizado (Case Insensitive)
+            view_tasks = [t for t in view_tasks if t.responsible.strip().title() in sel_analysts]
         
-        # Adicional: Filtro do Header também se aplica?
-        # Sim, ele já filtra 'all_tasks' antes de chegar aqui. 
-        # Então se o Header filtrar por 'Analista X', 'view_tasks' aqui já terá apenas 'Analista X'.
-
         # 3. Métricas Rápidas
         stats = DashboardView.calculate_stats(view_tasks)
         efficiency = int((stats["completed"] / stats["total"] * 100) if stats["total"] > 0 else 0)
@@ -3204,32 +3694,57 @@ class ManagerDashboardView:
                     DashboardView.render_priority_chart(df_chart)
 
         with t_equipe:
-            st.markdown("##### 🏆 Ranking de Produtividade")
-            # Criar tabela resumo por analista
+            st.markdown("##### 🏆 Ranking de Produtividade (Visão Atual)")
+            
+            # Agrupar tarefas FILTRADAS por responsável (Normalizado)
+            perf_data = {}
+            for t in view_tasks:
+                resp = t.responsible.strip().title()
+                if resp not in perf_data: 
+                    perf_data[resp] = []
+                perf_data[resp].append(t)
+            
             resumo_data = []
-            for a in analysts:
-                a_list = [t for t in tasks if t.responsible == a]
-                s = DashboardView.calculate_stats(a_list)
+            
+            # Se não houver dados, mostrar ao menos os analistas selecionados com zero
+            target_analysts = sel_analysts if sel_analysts else analysts
+            
+            # Iterar sobre quem tem tarefas no filtro OU quem foi selecionado
+            # (Prefiro iterar sobre quem tem tarefas para o ranking ser real)
+            # Mas se 'sel_analysts' estiver ativo, queremos ver só eles.
+            
+            analysts_to_show = set(perf_data.keys())
+            if sel_analysts:
+                 analysts_to_show = analysts_to_show.intersection(set(sel_analysts))
+                 # Adicionar selecionados que estão zerados (para mostrar que não tem nada)
+                 analysts_to_show.update(sel_analysts)
+            
+            for resp_name in sorted(list(analysts_to_show)):
+                r_tasks = perf_data.get(resp_name, [])
+                s = DashboardView.calculate_stats(r_tasks)
                 eff = int((s["completed"] / s["total"] * 100) if s["total"] > 0 else 0)
                 resumo_data.append({
-                    "Analista": a,
-                    "Total": s["total"],
-                    "Concluídas": s["completed"],
-                    "Pendentes": s["in_progress"] + s["urgent"],
-                    "Atrasadas": s["overdue"],
-                    "Eficiência": eff
+                     "Analista": resp_name,
+                     "Total": s["total"],
+                     "Concluídas": s["completed"],
+                     "Pendentes": s["in_progress"] + s["urgent"],
+                     "Atrasadas": s["overdue"],
+                     "Eficiência": eff
                 })
             
-            df_res = pd.DataFrame(resumo_data).sort_values(by="Eficiência", ascending=False)
-            st.dataframe(
-                df_res,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Eficiência": st.column_config.ProgressColumn("Eficiência %", min_value=0, max_value=100, format="%d%%"),
-                    "Analista": st.column_config.TextColumn("Analista", width="medium"),
-                }
-            )
+            if not resumo_data:
+                 st.info("Nenhum dado para exibir neste recorte.")
+            else:
+                df_res = pd.DataFrame(resumo_data).sort_values(by="Eficiência", ascending=False)
+                st.dataframe(
+                    df_res,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Eficiência": st.column_config.ProgressColumn("Eficiência %", min_value=0, max_value=100, format="%d%%"),
+                        "Analista": st.column_config.TextColumn("Analista", width="medium"),
+                    }
+                )
 
         with t_lista:
             if not view_tasks:
@@ -3363,51 +3878,100 @@ def main() -> None:
          st.markdown("<br>", unsafe_allow_html=True)
 
          # ROW 2: Área de Filtros (Esticada)
-         if is_admin_or_manager or page == "Quadros":
-            r_cols = st.columns([0.01, 0.49, 0.5])
-            
-            with r_cols[1]:
-                if is_admin_or_manager:
-                    all_ans = sorted(list(set([t.responsible.title().strip() for t in st.session_state.tasks if t.responsible])))
+         # Mostrar filtros em Todas as Paginas de Dados (Quadros, Kanban, Calendário e Painel)
+         priority_filter = "Todos"
+         today_filter = False
+         
+         if (page in ["Quadros", "Kanban"]) or (is_admin_or_manager and page in ["Calendário", "Painel", "Follow-Up"]):
+            # Layout diferente para gestores vs usuários normais
+            if is_admin_or_manager:
+                # Gestores: Redistribuição do espaço (100% total) para esticar os botões
+                # [Analista (27%), Categoria (32%), Prioridade (21%), Hoje (20%)]
+                r_cols = st.columns([0.27, 0.32, 0.21, 0.20])
+                
+                with r_cols[0]:
+                    # Lista fixa da equipe para o filtro
+                    core_team_map = {
+                        "2949400": "Maicon",
+                        "2858700": "Kherolainy",
+                        "2791900": "Maria",
+                        "2944000": "Davi"
+                    }
+                    core_names = []
+                    for mid, default_name in core_team_map.items():
+                        d = buscar_colaborador_por_matricula(mid)
+                        if d.get("nome"):
+                            name = d.get("nome").split()[0].title()
+                        else:
+                            name = default_name
+                        core_names.append(name)
+                    
+                    task_names = [t.responsible.strip().title() for t in st.session_state.tasks if t.responsible]
+                    all_ans = sorted(list(set(core_names + task_names)))
+
                     analyst_filter = st.selectbox(
                         "Analista",
-                        ["Todos"] + all_ans,
+                        ["👤 Analista"] + all_ans,
                         index=0,
                         key="header_analyst_filter",
                         label_visibility="collapsed"
                     )
-
-            with r_cols[2]:
-                allowed_header_cats = []
+                    if analyst_filter == "👤 Analista":
+                        analyst_filter = "Todos"
                 
-                # Se um analista específico estiver selecionado no header, filtrar os temas dele
-                if is_admin_or_manager and analyst_filter != "Todos":
-                    # Pega temas que o analista tem tarefas atribuídas
-                    allowed_header_cats = sorted(list(set([t.category for t in st.session_state.tasks if t.responsible == analyst_filter])))
-                else:
-                    # Lógica padrão de carregamento
+                with r_cols[1]:
+                    allowed_header_cats = []
+                    if analyst_filter != "Todos":
+                        # Filtro Normalizado
+                        allowed_header_cats = sorted(list(set([t.category for t in st.session_state.tasks if t.responsible.strip().title() == analyst_filter])))
+                    else:
+                        for v in st.session_state.categories.values():
+                            allowed_header_cats.append(v["name"])
+                    
+                    cat_opts = ["📁 Categoria"] + sorted(list(set(allowed_header_cats)))
+                    cat_filter = st.selectbox("Categoria", cat_opts, index=0, label_visibility="collapsed", key="header_cat_filter")
+                    if cat_filter == "📁 Categoria":
+                        cat_filter = "Todos"
+                
+                with r_cols[2]:
+                    priority_opts = ["⚡ Prioridade", "Baixa", "Média", "Alta", "Urgente"]
+                    priority_filter = st.selectbox("Prioridade", priority_opts, index=0, key="header_priority_filter", label_visibility="collapsed")
+                    if priority_filter == "⚡ Prioridade":
+                        priority_filter = "Todos"
+                
+                with r_cols[3]:
+                    today_filter = st.checkbox("📅 Hoje", key="header_today_filter", help="Demandas para hoje")
+            else:
+                # Usuários normais: [Categoria, Prioridade, Hoje] - colunas mais largas
+                r_cols = st.columns([0.40, 0.35, 0.15, 0.10])
+                
+                with r_cols[0]:
+                    allowed_header_cats = []
                     for v in st.session_state.categories.values():
                         owner = v.get("owner")
-                        if is_admin_or_manager:
+                        if owner == current_matricula or (owner is None and current_matricula == "2949400"):
                             allowed_header_cats.append(v["name"])
-                        elif owner == current_matricula:
-                            allowed_header_cats.append(v["name"])
-                        elif owner is None and current_matricula == "2949400":
-                            allowed_header_cats.append(v["name"])
-
-                cat_opts = ["Todos"] + sorted(list(set(allowed_header_cats)))
-                cat_filter = st.selectbox(
-                    "Filtro",
-                    cat_opts,
-                    index=0,
-                    label_visibility="collapsed",
-                    key="header_cat_filter"
-                )
+                    
+                    cat_opts = ["📁 Categoria"] + sorted(list(set(allowed_header_cats)))
+                    cat_filter = st.selectbox("Categoria", cat_opts, index=0, label_visibility="collapsed", key="header_cat_filter")
+                    if cat_filter == "📁 Categoria":
+                        cat_filter = "Todos"
+                
+                with r_cols[1]:
+                    priority_opts = ["⚡ Prioridade", "Baixa", "Média", "Alta", "Urgente"]
+                    priority_filter = st.selectbox("Prioridade", priority_opts, index=0, key="header_priority_filter", label_visibility="collapsed")
+                    if priority_filter == "⚡ Prioridade":
+                        priority_filter = "Todos"
+                
+                with r_cols[2]:
+                    today_filter = st.checkbox("📅 Hoje", key="header_today_filter", help="Mostrar apenas demandas com prazo para hoje")
     
     # Modais
     NewTaskModal.render()
     UpdatesModal.render()
     CategoryManagerModal.render()
+    EditTaskModal.render()
+    EditTaskModal.render()
     
     # Filtro geral por quadro e busca
     all_tasks: List[Task] = st.session_state.tasks
@@ -3420,13 +3984,24 @@ def main() -> None:
     # Se user_name for "Visitante" (falha no login), não mostra nada
     
     if current_matricula not in ["2949400", "2484901", "GESTAO"]:
-        all_tasks = [t for t in all_tasks if t.responsible == user_name]
+        # Mostrar tarefas onde o usuário é responsável OU está como colaborador
+        all_tasks = [t for t in all_tasks if t.responsible == user_name or user_name in (t.collaborators or [])]
     
     if cat_filter != "Todos":
         all_tasks = [t for t in all_tasks if t.category == cat_filter]
         
     if analyst_filter != "Todos":
         all_tasks = [t for t in all_tasks if t.responsible.lower() == analyst_filter.lower()]
+    
+    # Filtro de Prioridade
+    if priority_filter != "Todos":
+        all_tasks = [t for t in all_tasks if t.priority == priority_filter]
+    
+    # Filtro de Hoje (demandas com prazo para hoje)
+    if today_filter:
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        all_tasks = [t for t in all_tasks if t.due_date == today_str]
+    
     if search:
         q = search.lower()
         all_tasks = [
@@ -3446,37 +4021,6 @@ def main() -> None:
     
     if page in views:
         views[page].render(all_tasks)
-
-    # Modal de Edição de Atividade (Global)
-    editing_id = st.session_state.get("editing_task_id")
-    if editing_id:
-        task_to_edit = next((t for t in st.session_state.tasks if t.id == editing_id), None)
-        if task_to_edit:
-            with st.expander("✏️ Editar Atividade", expanded=True):
-                with st.form("form_edit_task"):
-                    e_title = st.text_input("Título", value=task_to_edit.title)
-                    e_desc = st.text_area("Descrição", value=task_to_edit.description, height=150)
-                    e_prio = st.selectbox("Prioridade", list(PRIORITY_CONFIG.keys()), index=list(PRIORITY_CONFIG.keys()).index(task_to_edit.priority))
-                    e_due = st.date_input("Prazo", value=datetime.strptime(task_to_edit.due_date, "%Y-%m-%d"))
-                    
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        if st.form_submit_button("💾 Salvar Alterações", type="primary", use_container_width=True):
-                            task_to_edit.title = e_title
-                            task_to_edit.description = e_desc
-                            task_to_edit.priority = e_prio
-                            task_to_edit.due_date = e_due.strftime("%Y-%m-%d")
-                            dm = DataManager()
-                            dm.save_tasks(st.session_state.tasks)
-                            st.session_state.editing_task_id = None
-                            st.success("Alterações salvas!")
-                            time.sleep(0.5)
-                            st.rerun()
-                    with c2:
-                        if st.form_submit_button("❌ Cancelar", use_container_width=True):
-                            st.session_state.editing_task_id = None
-                            st.rerun()
-
 
 if __name__ == "__main__":
     main()
