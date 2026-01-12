@@ -2954,43 +2954,34 @@ def load_custom_css() -> None:
              color: #f8fafc !important;
         }
         
-        /* 1. FORCE TRANSPARENT INPUTS (Fix White Boxes) */
-        html body .stTextInput div[data-baseweb="input"],
-        html body .stDateInput div[data-baseweb="input"],
-        html body .stNumberInput div[data-baseweb="input"],
+        /* 1. FORCE VISIBLE INPUTS (Login & Others) */
+        html body .stTextInput input,
+        html body .stDateInput input,
+        html body .stNumberInput input,
         html body .stSelectbox div[data-baseweb="select"] > div {
-            background-color: transparent !important;
-            background: transparent !important;
+            background-color: rgba(15, 23, 42, 0.8) !important; /* Fundo escuro semitransparente */
             border: 1px solid rgba(255, 255, 255, 0.3) !important;
-            color: #f8fafc !important;
+            color: #ffffff !important; /* Texto BRANCO PURO */
+            font-weight: 600 !important; /* Texto em negrito */
+            caret-color: #ffffff !important;
         }
 
-        /* 2. FORCE GHOST BUTTONS WITH VISIBLE BORDER */
-        html body .stButton > button {
-            background-color: transparent !important;
-            background: transparent !important;
-            background-image: none !important;
-            border: 1px solid rgba(255, 255, 255, 0.45) !important; /* Borda Branca Visível */
-            color: rgba(255, 255, 255, 0.9) !important;
+        /* 2. TASK CARD BUTTONS (Dark Background Force) */
+        /* Forçando fundo ESCURO para que o ícone branco apareça */
+        div[data-testid="stVerticalBlockBorderWrapper"] .stButton > button {
+            background-color: #0f172a !important; /* Azul Escuro Profundo */
+            background: #0f172a !important;
+            border: 1px solid rgba(255,255,255,0.3) !important;
+            color: #ffffff !important;
             border-radius: 8px !important;
-            box-shadow: none !important;
-            text-shadow: none !important;
-            transition: all 0.2s ease !important;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.5) !important;
         }
         
-        html body .stButton > button:hover {
-            background-color: rgba(255, 255, 255, 0.1) !important;
-            border-color: rgba(255, 255, 255, 0.8) !important;
+        div[data-testid="stVerticalBlockBorderWrapper"] .stButton > button:hover {
+            background-color: #6366f1 !important; /* Roxo no hover */
+            border-color: #ffffff !important;
             color: white !important;
-            transform: scale(1.02);
-        }
-
-        html body .stButton > button:active,
-        html body .stButton > button:focus {
-            background-color: rgba(255, 255, 255, 0.2) !important;
-            border-color: #6366f1 !important;
-            color: white !important;
-            box-shadow: none !important;
+            transform: scale(1.05);
         }
 
         /* 3. FIX AUTOFILL BACKGROUNDS (Login Page) */
@@ -3002,12 +2993,14 @@ def load_custom_css() -> None:
             -webkit-text-fill-color: white !important;
             transition: background-color 5000s ease-in-out 0s;
             caret-color: white !important;
+            font-weight: 600 !important;
         }
 
-        /* 4. ENHANCE TASK CARD VISIBILITY (Visible Borders) */
+        /* 4. ENHANCE TASK CARD VISIBILITY (Solid White Borders) */
         div[data-testid="stVerticalBlockBorderWrapper"] {
-            border: 1px solid rgba(255, 255, 255, 0.6) !important; /* Borda Branca Bem Visível */
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3) !important;
+            border: 2px solid #ffffff !important; /* Borda Branca Sólida 2px */
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.5) !important;
+            background-color: rgba(30, 41, 59, 0.4) !important;
         }
         
         /* 5. FIX TOAST & ALERTS (Success/Error Messages) */
