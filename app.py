@@ -1250,7 +1250,6 @@ class BoardsView:
             unsafe_allow_html=True
         )
 
-    @classmethod
     @staticmethod
     def _clean_html(text: str) -> str:
         if not text: return ""
@@ -1487,6 +1486,58 @@ class BoardsView:
                                  else: st.session_state.expanded_task_updates.add(task.id)
                                  st.rerun()
                     st.markdown('</div>', unsafe_allow_html=True)
+                
+                # --- INLINE EDIT FORM (RENDERIZADO LOGO ABAIXO DO CARD) ---
+                if st.session_state.get("editing_task_id") == task.id:
+                    st.markdown(
+                        """
+                        <div style="background: rgba(30, 41, 59, 0.95); padding: 20px; border-radius: 12px; border: 1px solid #6366f1; margin-top: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.3);">
+                            <div style="color: #818cf8; font-weight: 700; margin-bottom: 12px; font-size: 0.9rem;">✏️ Editando: <span style="color: white;">{}</span></div>
+                        </div>
+                        """.format(task.title), unsafe_allow_html=True
+                    )
+                    
+                    with st.container():
+                         with st.form(key=f"inline_edit_{task.id}"):
+                             ie_title = st.text_input("Título", value=task.title)
+                             ie_desc = st.text_area("Descrição", value=task.description, height=100)
+                             
+                             iec1, iec2 = st.columns(2)
+                             with iec1:
+                                 ie_prio = st.selectbox("Prioridade", list(PRIORITY_CONFIG.keys()), index=list(PRIORITY_CONFIG.keys()).index(task.priority), key=f"ie_p_{task.id}")
+                             with iec2:
+                                 current_due_dt = datetime.strptime(task.due_date, "%Y-%m-%d")
+                                 ie_due = st.date_input("Prazo", value=current_due_dt, format="DD/MM/YYYY", key=f"ie_d_{task.id}")
+                             
+                             mark_completed = st.checkbox("✅ Marcar como Concluída", value=(task.status == "Concluída"))
+                             
+                             st.markdown("<div style='margin-top: 12px;'></div>", unsafe_allow_html=True)
+                             icol1, icol2 = st.columns([0.4, 0.4])
+                             
+                             with icol1:
+                                 if st.form_submit_button("💾 Salvar Alterações", type="primary", use_container_width=True):
+                                     # Salvar lógica
+                                     task.title = ie_title
+                                     task.description = ie_desc
+                                     task.priority = ie_prio
+                                     task.due_date = ie_due.strftime("%Y-%m-%d")
+                                     if mark_completed:
+                                         task.status = "Concluída"
+                                     elif task.status == "Concluída" and not mark_completed:
+                                          task.status = "Pendente"
+                                     
+                                     st.session_state.data_manager.save_tasks(st.session_state.tasks)
+                                     st.session_state.editing_task_id = None
+                                     st.toast("Tarefa atualizada!", icon="✅")
+                                     time.sleep(0.5)
+                                     st.rerun()
+                             
+                             with icol2:
+                                 if st.form_submit_button("❌ Fechar Edição", use_container_width=True):
+                                     st.session_state.editing_task_id = None
+                                     st.rerun()
+                    
+                    st.markdown("<br>", unsafe_allow_html=True)
                 
                 if task.id in st.session_state.expanded_task_updates:
                     # Seção de Anexos
@@ -2249,7 +2300,7 @@ class FollowUpView:
 
                     # 2. Área de Edição (Apenas Gestores)
                     current_matricula = st.session_state.get("current_user", "")
-                    is_manager_role = current_matricula in ["2949400", "2484901", "GESTAO"]
+                    is_manager_role = current_matricula in ["2484901", "GESTAO"]
                     
                     if is_manager_role:
                          with st.expander("🗨️ Adicionar Notificação / Feedback", expanded=False):
@@ -2922,7 +2973,25 @@ def load_custom_css() -> None:
         .main .block-container {
             padding: 1.5rem 3rem !important;
             max-width: 100% !important;
-            padding-top: 1rem !important; /* Ajuste para subir o conteúdo já que removemos o header */
+            padding-top: 1rem !important;
+        }
+
+        /* RESPONSIVIDADE MOBILE */
+        @media only screen and (max-width: 768px) {
+            .main .block-container {
+                padding: 1rem 1rem !important;
+            }
+            
+            /* Ajustar Fonte Gigante do Login */
+            h1[style*="font-size: 5rem"] {
+                font-size: 3.5rem !important;
+                line-height: 1.0 !important;
+            }
+            
+            /* Ajustes finos */
+            .page-header h1 {
+                font-size: 1.8rem;
+            }
         }
 
         /* HEADER DO APP */
@@ -3970,7 +4039,6 @@ def main() -> None:
     NewTaskModal.render()
     UpdatesModal.render()
     CategoryManagerModal.render()
-    EditTaskModal.render()
     EditTaskModal.render()
     
     # Filtro geral por quadro e busca
