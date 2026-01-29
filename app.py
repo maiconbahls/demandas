@@ -719,7 +719,8 @@ class NavigationSystem:
         "Quadros": "📋",
         "Calendário": "📅",
         "Kanban": "📝",
-        "Requisições": "📑",
+        "Cronograma": "📑",
+        "Acompanhamento": "📅",
         "Follow-Up": "💼",
     }
     
@@ -841,8 +842,8 @@ class NavigationSystem:
                 st.session_state.selected_page = "Kanban"
                 st.rerun()
         with cols[4]:
-            if st.button("📑 Requisições", key="nav_Requisições", use_container_width=True, type="primary" if st.session_state.selected_page == "Requisições" else "secondary"):
-                st.session_state.selected_page = "Requisições"
+            if st.button("📑 Cronograma", key="nav_Cronograma", use_container_width=True, type="primary" if st.session_state.selected_page == "Cronograma" else "secondary"):
+                st.session_state.selected_page = "Cronograma"
                 st.rerun()
         with cols[5]:
             if st.button("💼 Follow-Up", key="nav_Follow-Up", use_container_width=True, type="primary" if st.session_state.selected_page == "Follow-Up" else "secondary"):
@@ -1859,268 +1860,798 @@ class KanbanView:
 
 
 
-class RequestsView:
+class RequisiçõesView:
     @staticmethod
-    def render(tasks_ignored: List[Task]) -> None:
-        # Nota: ignoramos a lista de tarefas padrão pois usamos a lista de requisições independente
-        user_id = st.session_state.get("current_user", "2949400")
-        is_manager = user_id in ["GESTAO", "2484901", "2949400"]
+    def load_data():
+        import os
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        abs_path = os.path.join(base_dir, "BASE.BOLSAS", "Cronograma_Bolsas_Com_Subetapas.xlsx")
         
-        reqs = st.session_state.get("requests", [])
-        dm = st.session_state.data_manager
+        if not os.path.exists(abs_path):
+            st.warning(f"Arquivo não encontrado: {abs_path}")
+            return pd.DataFrame()
+        try:
+            df = pd.read_excel(abs_path)
+            df.columns = [c.strip().upper() for c in df.columns]
+            
+            # Normalizar nome da coluna Etapa caso o usuário tenha renomeado
+            if 'ETAPA / SUB-ETAPA' in df.columns:
+                df = df.rename(columns={'ETAPA / SUB-ETAPA': 'ETAPA'})
+            
+            if 'ETAPA' in df.columns:
+                df['ETAPA'] = df['ETAPA'].ffill()
+            return df
+        except Exception as e:
+            st.error(f"Erro ao ler o arquivo Excel: {e}")
+            return pd.DataFrame()
+
+    @staticmethod
+    def save_data(new_row):
+        import os
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        abs_path = os.path.join(base_dir, "BASE.BOLSAS", "Cronograma_Bolsas_Com_Subetapas.xlsx")
         
-        # Título Dinâmico
-        header_title = "📑 Minhas Requisições (RC/PO)" if not is_manager else "📑 Gestão Global de Requisições (RC/PO)"
+        try:
+            if os.path.exists(abs_path):
+                df = pd.read_excel(abs_path)
+            else:
+                df = pd.DataFrame(columns=['Tema / Quadro', 'ETAPA', 'Descrição / Sub-etapa', 'Início', 'Fim'])
+            
+            # Formatar datas para o padrão Excel esperado (string ou datetime)
+            # Vamos manter como string d/m/Y se for o padrão do usuário ou deixar o pandas lidar
+            
+            new_df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+            new_df.to_excel(abs_path, index=False)
+            return True
+        except Exception as e:
+            st.error(f"Erro ao salvar no Excel: {e}")
+            return False
+
+    @classmethod
+    def render(cls, tasks=None):
+        df = cls.load_data()
+        st.markdown("""
+        <style>
+        .timeline-header-premium {
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); 
+            color: white; padding: 25px 35px; border-radius: 20px;
+            margin-bottom: 30px; display: flex; flex-direction: column; gap: 20px;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.2); border: 1px solid rgba(255,255,255,0.08);
+        }
+        .header-top-row { display: flex; justify-content: space-between; align-items: center; width: 100%; }
+        .progress-container-strategic { width: 100%; background: rgba(255,255,255,0.05); height: 8px; border-radius: 10px; overflow: hidden; margin-top: 5px; }
+        .progress-bar-strategic { height: 100%; background: linear-gradient(90deg, #6366f1, #a855f7); border-radius: 10px; transition: width 1s ease-in-out; }
+        .progress-label-strategic { font-size: 0.75rem; color: #94a3b8; font-weight: 700; margin-top: 10px; display: flex; justify-content: space-between; }
         
+        .month-card-premium {
+            background: #ffffff; border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.05);
+            overflow: hidden; border: 1px solid #f1f5f9; margin-bottom: 30px; transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .month-card-premium:hover { transform: translateY(-8px); box-shadow: 0 20px 40px rgba(0,0,0,0.1); }
+        .month-card-header {
+            background: #0f172a; color: #f8fafc; padding: 16px 24px;
+            display: flex; justify-content: space-between; align-items: center; font-weight: 800;
+            text-transform: uppercase; font-size: 0.95rem; letter-spacing: 1px;
+        }
+        .calendar-table-premium { width: 100%; border-collapse: collapse; background: white; table-layout: fixed; }
+        .calendar-table-premium th { padding: 15px 5px; text-align: center; color: #64748b; font-size: 0.7rem; font-weight: 800; border-bottom: 2px solid #f8fafc; text-transform: uppercase; }
+        .calendar-table-premium td { height: 125px; border: 1px solid #f1f5f9; vertical-align: top; padding: 10px; position: relative; transition: background 0.2s; }
+        .calendar-table-premium td:hover { background: #fcfdfe; }
+        .day-label { color: #94a3b8; font-size: 0.9rem; font-weight: 800; margin-bottom: 8px; display: block; }
+        .today-cell { background: #f0f7ff !important; }
+        .today-cell .day-label { color: #3b82f6; }
+        
+        .timeline-bar-premium {
+            height: 22px; border-radius: 6px; margin-bottom: 5px; color: white;
+            font-size: 0.5rem; font-weight: 700; padding: 0 8px; 
+            display: block; line-height: 22px; text-align: center; cursor: pointer;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            border: 1px solid rgba(255,255,255,0.1);
+            font-family: 'Plus Jakarta Sans', sans-serif !important;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative; z-index: 1;
+        }
+        .timeline-bar-premium:hover {
+            transform: scale(1.05);
+            z-index: 100 !important;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2);
+        }
+        .bg-green { background: linear-gradient(135deg, #10b981 0%, #059669 100%); }
+        .bg-blue { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); }
+        .bg-indigo { background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); }
+        .bg-orange { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); }
+        .bg-purple { background: linear-gradient(135deg, #a855f7 0%, #9333ea 100%); }
+        .bg-rose { background: linear-gradient(135deg, #f43f5e 0%, #e11d48 100%); }
+        
+        /* OTIMIZAÇÃO PARA PDF E IMPRESSÃO PAISAGEM */
+        @media print {
+            @page { size: landscape; margin: 10mm; }
+            
+            /* Esconder elementos de interface */
+            header, footer, [data-testid="stSidebar"], .stButton, .stRadio, .stSelectbox, .stToggle, 
+            [data-testid="stHeader"], .stMarkdown button, [data-testid="stVerticalBlock"] > div:has(button) {
+                display: none !important;
+            }
+            
+            /* Ajustar containers */
+            .main .block-container { padding: 0 !important; max-width: 100% !important; margin: 0 !important; }
+            
+            /* Cabeçalho de Progresso (Dashboard) */
+            .timeline-header-premium { 
+                box-shadow: none !important; 
+                border: 2px solid #1e293b !important;
+                background: #0f172a !important; 
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+                width: 100% !important;
+                margin-bottom: 20px !important;
+                page-break-inside: avoid;
+            }
+            
+            /* Forçar cores nas barras */
+            .timeline-bar-premium, .progress-bar-strategic, [style*="background"] { 
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+            }
+            
+            /* Ajustar Grade de Meses para Paisagem */
+            [data-testid="stHorizontalBlock"] {
+                display: flex !important;
+                flex-direction: row !important;
+                flex-wrap: nowrap !important;
+                gap: 10px !important;
+            }
+            
+            .month-card-premium { 
+                break-inside: avoid;
+                box-shadow: none !important;
+                border: 1px solid #e2e8f0 !important;
+                width: 100% !important;
+                margin-bottom: 15px !important;
+            }
+            
+            .calendar-table-premium th { padding: 8px 4px !important; font-size: 0.6rem !important; }
+            .calendar-table-premium td { height: auto !important; min-height: 80px !important; padding: 8px !important; }
+            .day-label { font-size: 0.8rem !important; margin-bottom: 4px !important; }
+            .timeline-bar-premium { font-size: 0.5rem !important; height: 18px !important; line-height: 18px !important; padding: 0 8px !important; margin-bottom: 4px !important; }
+            .month-card-header { padding: 12px 20px !important; font-size: 0.85rem !important; }
+            
+            body { background: white !important; color: black !important; }
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        now = datetime.now().date()
+        
+        if df.empty:
+            st.warning("⚠️ Planilha não encontrada ou vazia em BASE.BOLSAS.")
+            return
+
+        # Filtro de Programa
+        program_col = 'TEMA / QUADRO'
+        # Limpar emojis de programas existentes no Excel para manter padrão
+        def clean_emoji(t):
+            import re
+            return re.sub(r'[^\w\s\(\)\[\]\-\/\.\,]', '', str(t)).strip()
+        
+        df[program_col] = df[program_col].apply(clean_emoji)
+        programs = ["Todos"] + sorted(df[program_col].dropna().unique().tolist())
+        
+        c_filter, c_mode, c_focus, c_btn = st.columns([0.2, 0.25, 0.15, 0.4])
+        with c_filter:
+            selected_program = st.selectbox("🎯 Filtrar", programs, index=0)
+        
+        display_mode = "Calendário Unificado"
+        resumo_mode = False
+        if selected_program == "Todos":
+            with c_mode:
+                display_mode = st.radio("📊 Modo", ["Unificado", "Lista", "Resumo"], horizontal=True, help="Unificado: Grid de meses | Lista: Um programa por vez | Resumo: Apenas etapas principais")
+                if display_mode == "Resumo":
+                    resumo_mode = True
+                    display_mode = "Calendário Unificado"
+        
+        with c_focus:
+            st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+            focus_mode = st.toggle("🔍 Ampliar", value=False, help="Maximiza o calendário para ver detalhes")
+
+        with c_btn:
+            st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("➕ Cadastrar", use_container_width=True, type="primary"):
+                    cls.show_cadastrar_modal([p for p in programs if p != "Todos"])
+            with col2:
+                if st.button("✏️ Gerenciar", use_container_width=True):
+                    cls.show_manage_modal(df)
+            
+            st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+            if st.button("📄 Gerar PDF / Imprimir", use_container_width=True):
+                st.components.v1.html(
+                    """
+                    <script>
+                        window.parent.print();
+                    </script>
+                    """,
+                    height=0,
+                    width=0
+                )
+
+        # Filtrar o DF para o programa selecionado
+        if selected_program == "Todos":
+            prog_df = df.copy()
+            active_title = "Visão Geral Estratégica"
+        else:
+            prog_df = df[df[program_col] == selected_program].copy()
+            active_title = selected_program
+
+        prog_df['dt_inicio'] = pd.to_datetime(prog_df['INÍCIO'], dayfirst=True).dt.date
+        prog_df['dt_fim'] = pd.to_datetime(prog_df['FIM'], dayfirst=True).dt.date
+        
+        # Cálculo de Progresso (Geral e Individual)
+        progresso_por_programa = []
+        total_p = 0
+        
+        if not df.empty:
+            # Calcular progresso individual para cada programa
+            unique_progs = sorted(df[program_col].dropna().unique().tolist())
+            for p_name in unique_progs:
+                p_df = df[df[program_col] == p_name].copy()
+                p_df['dt_inicio'] = pd.to_datetime(p_df['INÍCIO'], dayfirst=True).dt.date
+                p_df['dt_fim'] = pd.to_datetime(p_df['FIM'], dayfirst=True).dt.date
+                
+                ps_start = p_df['dt_inicio'].min()
+                ps_end = p_df['dt_fim'].max()
+                
+                p_percent = 0
+                if ps_start and ps_end:
+                    p_total_days = (ps_end - ps_start).days
+                    p_elapsed = (now - ps_start).days
+                    if p_total_days > 0:
+                        p_percent = max(0, min(100, int((p_elapsed / p_total_days) * 100)))
+                    elif now >= ps_end:
+                        p_percent = 100
+                
+                # Definir cor da barra
+                p_color = "#10b981" if "Bolsas" in p_name else ("#3b82f6" if "Incentivo" in p_name else ("#4f46e5" if "Estágio" in p_name else "#6366f1"))
+                progresso_por_programa.append({"nome": p_name, "percent": p_percent, "color": p_color})
+
+            # Calcular progresso geral (do que está sendo exibido)
+            p_start = prog_df['dt_inicio'].min()
+            p_end = prog_df['dt_fim'].max()
+            if p_start and p_end:
+                total_days = (p_end - p_start).days
+                elapsed_days = (now - p_start).days
+                if total_days > 0:
+                    total_p = max(0, min(100, int((elapsed_days / total_days) * 100)))
+                elif now >= p_end:
+                    total_p = 100
+
+        # Render Header com Progresso
+        mes_atual_extenso = MESES_PT[datetime.now().month]
+        data_brasileira = f"{datetime.now().day} de {mes_atual_extenso}, {datetime.now().year}"
+
+        # Título dinâmico
+        if selected_program == "Todos":
+            title_html = f"""<div>
+<h2 style="margin: 0; color: white; font-size: 1.4rem; font-weight: 900; letter-spacing: -0.5px;">Cronograma Consolidado</h2>
+<p style="margin: 0; color: #94a3b8; font-size: 0.9rem; font-weight: 500;">Monitoramento múltiplo de programas estratégico</p>
+</div>"""
+            # Gerar barras de progresso múltiplas
+            bars_html = ""
+            for p_info in progresso_por_programa:
+                bars_html += f"""
+<div style="margin-bottom: 12px;">
+    <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: #cbd5e1; font-weight: 800; margin-bottom: 4px;">
+        <span>{p_info['nome'].upper()}</span>
+        <span>{p_info['percent']}%</span>
+    </div>
+    <div style="width: 100%; height: 6px; background: rgba(255,255,255,0.05); border-radius: 10px; overflow: hidden;">
+        <div style="width: {p_info['percent']}%; height: 100%; background: {p_info['color']}; border-radius: 10px; transition: width 0.8s ease;"></div>
+    </div>
+</div>"""
+            progress_section = f'<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px 30px; margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">{bars_html}</div>'
+        else:
+            title_html = f"""<div>
+<h2 style="margin: 0; color: white; font-size: 1.8rem; font-weight: 900; letter-spacing: -0.5px;">{active_title}</h2>
+<p style="margin: 0; color: #94a3b8; font-size: 1rem; font-weight: 500;">Cronograma Individual de Programa</p>
+</div>"""
+            progress_section = f"""
+<div style="width: 100%; margin-top: 15px;">
+    <div class="progress-label-strategic">
+        <span>STATUS DE FINALIZAÇÃO</span>
+        <span>{total_p}% CONCLUÍDO</span>
+    </div>
+    <div class="progress-container-strategic">
+        <div class="progress-bar-strategic" style="width: {total_p}%;"></div>
+    </div>
+</div>"""
+
+        st.markdown(f"""<div class="timeline-header-premium">
+<div class="header-top-row">
+    <div style="display: flex; align-items: center; gap: 20px;">
+        <div style="background: white; padding: 10px; border-radius: 14px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1);">
+            <img src="https://streamlit.io/images/brand/streamlit-logo-secondary-colormark-darktext.png" width="32">
+        </div>
+        {title_html}
+    </div>
+    <div style="text-align: right;">
+        <div style="background: rgba(99, 102, 241, 0.15); border: 1px solid rgba(99, 102, 241, 0.2); padding: 8px 20px; border-radius: 25px;">
+            <span style="color: #818cf8; font-size: 0.9rem; font-weight: 800;">{data_brasileira}</span>
+        </div>
+    </div>
+</div>
+{progress_section}
+
+<!-- LEGENDA DE CORES DINÂMICA -->
+<div style="display: flex; flex-wrap: wrap; gap: 15px; margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
+    <div style="display: flex; align-items: center; gap: 6px;">
+        <div style="width: 12px; height: 12px; border-radius: 3px; background: #10b981;"></div>
+        <span style="color: #94a3b8; font-size: 0.75rem; font-weight: 600;">Bolsas</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+        <div style="width: 12px; height: 12px; border-radius: 3px; background: #3b82f6;"></div>
+        <span style="color: #94a3b8; font-size: 0.75rem; font-weight: 600;">Incentivo</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+        <div style="width: 12px; height: 12px; border-radius: 3px; background: #4f46e5;"></div>
+        <span style="color: #94a3b8; font-size: 0.75rem; font-weight: 600;">Estágio</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+        <div style="width: 12px; height: 12px; border-radius: 3px; background: #ea580c;"></div>
+        <span style="color: #94a3b8; font-size: 0.75rem; font-weight: 600;">Indicadores</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+        <div style="width: 12px; height: 12px; border-radius: 3px; background: #7c3aed;"></div>
+        <span style="color: #94a3b8; font-size: 0.7rem; font-weight: 600;">Desenvolvimento</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+        <div style="width: 12px; height: 12px; border-radius: 3px; background: #e11d48;"></div>
+        <span style="color: #94a3b8; font-size: 0.75rem; font-weight: 600;">Instituições</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px;">
+        <div style="width: 12px; height: 12px; border-radius: 3px; background: #6b7280;"></div>
+        <span style="color: #94a3b8; font-size: 0.75rem; font-weight: 600;">Deskbee</span>
+    </div>
+</div>
+</div>""", unsafe_allow_html=True)
+
+        # Renderizar conforme o modo selecionado
+        if display_mode == "Lista":
+            # Agrupar por programa e mostrar CALENDÁRIOS completos um embaixo do outro
+            st.markdown("<br>", unsafe_allow_html=True)
+            for prog_name in sorted(prog_df[program_col].unique()):
+                sub_df = prog_df[prog_df[program_col] == prog_name].copy()
+                
+                st.markdown(f"### {prog_name}")
+                
+                # Para cada programa, mostrar seu próprio conjunto de meses
+                sub_dates = pd.concat([sub_df['dt_inicio'], sub_df['dt_fim']])
+                s_min, s_max = sub_dates.min(), sub_dates.max()
+                
+                s_months = []
+                s_curr = s_min.replace(day=1)
+                while s_curr <= s_max.replace(day=1):
+                    s_months.append((s_curr.year, s_curr.month))
+                    if s_curr.month == 12: s_curr = s_curr.replace(year=s_curr.year + 1, month=1)
+                    else: s_curr = s_curr.replace(month=s_curr.month + 1)
+                
+                # Renderizar meses deste programa específico
+                step = 1 if focus_mode else 2
+                for i in range(0, len(s_months), step):
+                    cols = st.columns(step)
+                    for j in range(step):
+                        if i + j < len(s_months):
+                            y, m = s_months[i+j]
+                            with cols[j]: 
+                                cls.render_month_premium(y, m, sub_df, focus_mode, hide_substeps=resumo_mode)
+                st.markdown("---")
+        else:
+            # MODO CALENDÁRIO UNIFICADO (GRID)
+            all_dates = pd.concat([pd.to_datetime(prog_df['INÍCIO'], dayfirst=True), pd.to_datetime(prog_df['FIM'], dayfirst=True)])
+            min_date, max_date = all_dates.min(), all_dates.max()
+            
+            display_months = []
+            curr = min_date.replace(day=1)
+            while curr <= max_date.replace(day=1):
+                display_months.append((curr.year, curr.month))
+                if curr.month == 12: curr = curr.replace(year=curr.year + 1, month=1)
+                else: curr = curr.replace(month=curr.month + 1)
+            
+            # Se focus_mode, mostrar 1 por linha, senão 2 por linha
+            step = 1 if focus_mode else 2
+            for i in range(0, len(display_months), step):
+                cols = st.columns(step)
+                for j in range(step):
+                    if i + j < len(display_months):
+                        y, m = display_months[i+j]
+                        with cols[j]: 
+                            cls.render_month_premium(y, m, prog_df, focus_mode, hide_substeps=resumo_mode)
+
+    @classmethod
+    @st.dialog("Gerenciar Atividades", width="large")
+    def show_manage_modal(cls, df):
+        st.markdown("### ✏️ Editar ou Excluir Atividades")
+        
+        if df.empty:
+            st.info("Nenhuma atividade cadastrada para gerenciar.")
+            return
+
+        # Lista de atividades formatada para o selectbox
+        activity_options = []
+        for idx, row in df.iterrows():
+            label = f"[{row['TEMA / QUADRO']}] {row['DESCRIÇÃO / SUB-ETAPA']} ({row['INÍCIO']} - {row['FIM']})"
+            activity_options.append((label, idx))
+        
+        selected_label = st.selectbox("Selecione a atividade para modificar:", [o[0] for o in activity_options])
+        selected_idx = next(o[1] for o in activity_options if o[0] == selected_label)
+        
+        row = df.loc[selected_idx]
+        
+        with st.form("form_editar_cronograma"):
+            col1, col2 = st.columns(2)
+            with col1:
+                new_prog = st.text_input("Programa:", value=row['TEMA / QUADRO'])
+                etapas_validas = ["Etapa 1", "Etapa 2", "Etapa 3", "Etapa 4", "Etapa 5"]
+                current_etapa = str(row['ETAPA']).title()
+                idx_etapa = etapas_validas.index(current_etapa) if current_etapa in etapas_validas else 0
+                new_etapa = st.selectbox("Etapa:", etapas_validas, index=idx_etapa)
+            with col2:
+                new_desc = st.text_input("Descrição / Sub-etapa:", value=row['DESCRIÇÃO / SUB-ETAPA'])
+                c_data1, c_data2 = st.columns(2)
+                with c_data1:
+                    new_ini = st.date_input("Novo Início:", value=pd.to_datetime(row['INÍCIO'], dayfirst=True).date())
+                with c_data2:
+                    new_fim = st.date_input("Novo Fim:", value=pd.to_datetime(row['FIM'], dayfirst=True).date())
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            btn_col1, btn_col2 = st.columns(2)
+            with btn_col1:
+                submit_edit = st.form_submit_button("💾 Salvar Alterações", use_container_width=True)
+            with btn_col2:
+                submit_delete = st.form_submit_button("🗑️ EXCLUIR ATIVIDADE", use_container_width=True)
+
+            if submit_edit:
+                # Carregar o Excel original para manter formatação se possível (ou usar df atual)
+                excel_path = os.path.join("BASE.BOLSAS", "Cronograma_Bolsas_Com_Subetapas.xlsx")
+                df_full = pd.read_excel(excel_path)
+                
+                # Atualizar valores
+                df_full.loc[selected_idx, 'TEMA / QUADRO'] = new_prog
+                df_full.loc[selected_idx, 'ETAPA'] = new_etapa
+                df_full.loc[selected_idx, 'DESCRIÇÃO / SUB-ETAPA'] = new_desc
+                df_full.loc[selected_idx, 'INÍCIO'] = new_ini.strftime('%d/%m/%Y')
+                df_full.loc[selected_idx, 'FIM'] = new_fim.strftime('%d/%m/%Y')
+                
+                df_full.to_excel(excel_path, index=False)
+                st.success("✅ Atividade atualizada com sucesso!")
+                time.sleep(1)
+                st.rerun()
+
+            if submit_delete:
+                excel_path = os.path.join("BASE.BOLSAS", "Cronograma_Bolsas_Com_Subetapas.xlsx")
+                df_full = pd.read_excel(excel_path)
+                df_full = df_full.drop(selected_idx)
+                
+                df_full.to_excel(excel_path, index=False)
+                st.success("🗑️ Atividade excluída permanentemente!")
+                time.sleep(1)
+                st.rerun()
+
+    @classmethod
+    @st.dialog("Cadastrar Nova Atividade")
+    def show_cadastrar_modal(cls, existing_programs):
+        # Lista padronizada solicitada pelo usuário (sem emojis)
+        standard_programs = [
+            "Bolsas de Estudos",
+            "Incentivo à Educação (ETEC)",
+            "Programa de Estágio",
+            "Indicadores da Área",
+            "Projeto de Desenvolvimento",
+            "Relacionamento com Instituições",
+            "Deskbee"
+        ]
+        
+        # Combinar com programas que já existem no Excel
+        all_options = sorted(list(set(standard_programs + existing_programs)))
+
+        with st.form("form_novo_cronograma", clear_on_submit=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                prog = st.selectbox("Programa (Tema / Quadro)", all_options + ["Outro..."])
+                if prog == "Outro...":
+                    prog = st.text_input("Nome do Novo Programa")
+                etapa = st.text_input("Etapa (ex: Etapa 1)", value="Etapa 1")
+            
+            with col2:
+                desc = st.text_input("Descrição / Sub-etapa")
+                tipo = st.radio("Tipo de Registro", ["Principal", "Sub-etapa"], horizontal=True)
+
+            c3, c4 = st.columns(2)
+            with c3:
+                ini = st.date_input("Data de Início", format="DD/MM/YYYY")
+            with c4:
+                fim = st.date_input("Data de Fim", format="DD/MM/YYYY")
+            
+            submit = st.form_submit_button("💾 Salvar no Excel", use_container_width=True)
+            if submit:
+                final_etapa = etapa
+                if tipo == "Sub-etapa" and "- SUB-ETAPA" not in etapa.upper():
+                    final_etapa = f"{etapa} - Sub-Etapa"
+
+                new_row = {
+                    'Tema / Quadro': prog,
+                    'ETAPA': final_etapa,
+                    'Descrição / Sub-etapa': desc,
+                    'Início': ini.strftime('%d/%m/%Y'),
+                    'Fim': fim.strftime('%d/%m/%Y')
+                }
+                if cls.save_data(new_row):
+                    st.success("✅ Cadastrado com sucesso! Recarregando...")
+                    st.rerun()
+
+    @classmethod
+    def render_month_premium(cls, year, month, df, focus_mode=False, hide_substeps=False):
+        month_name = MESES_PT[month]
+        cal = calendar.monthcalendar(year, month)
+        m_start, m_end = date(year, month, 1), date(year, month, calendar.monthrange(year, month)[1])
+        m_data = df[(df['dt_inicio'] <= m_end) & (df['dt_fim'] >= m_start)].copy()
+        
+        today = date.today()
+        cell_min_height = "120px" if focus_mode else "90px"
+        card_class = "month-card-premium" + (" focus-card" if focus_mode else "")
+
+        # Função auxiliar para pegar cores dinamicamente
+        def get_colors(prog_name):
+            if "Bolsas" in str(prog_name):
+                return {
+                    "ETAPA 1": "linear-gradient(135deg, #064e3b 0%, #065f46 100%)",
+                    "ETAPA 2": "linear-gradient(135deg, #047857 0%, #10b981 100%)", 
+                    "ETAPA 3": "linear-gradient(135deg, #10b981 0%, #34d399 100%)", 
+                    "ETAPA 4": "linear-gradient(135deg, #34d399 0%, #6ee7b7 100%)", 
+                    "ETAPA 5": "linear-gradient(135deg, #6ee7b7 0%, #a7f3d0 100%)", 
+                    "DEFAULT": "linear-gradient(135deg, #10b981 0%, #059669 100%)",
+                    "BORDER": "#10b981"
+                }
+            elif "Incentivo" in str(prog_name):
+                return {
+                    "ETAPA 1": "linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%)",
+                    "ETAPA 2": "linear-gradient(135deg, #1e40af 0%, #3b82f6 100%)", 
+                    "ETAPA 3": "linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%)",
+                    "ETAPA 4": "linear-gradient(135deg, #60a5fa 0%, #93c5fd 100%)",
+                    "ETAPA 5": "linear-gradient(135deg, #93c5fd 0%, #bfdbfe 100%)",
+                    "DEFAULT": "linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)",
+                    "BORDER": "#3b82f6"
+                }
+            elif "Estágio" in str(prog_name):
+                return {
+                    "ETAPA 1": "linear-gradient(135deg, #312e81 0%, #3730a3 100%)",
+                    "ETAPA 2": "linear-gradient(135deg, #3730a3 0%, #4f46e5 100%)",
+                    "ETAPA 3": "linear-gradient(135deg, #4f46e5 0%, #6366f1 100%)",
+                    "ETAPA 4": "linear-gradient(135deg, #6366f1 0%, #818cf8 100%)",
+                    "ETAPA 5": "linear-gradient(135deg, #818cf8 0%, #a5b4fc 100%)",
+                    "DEFAULT": "linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)",
+                    "BORDER": "#4f46e5"
+                }
+            elif "Indicadores" in str(prog_name):
+                return {
+                    "ETAPA 1": "linear-gradient(135deg, #7c2d12 0%, #9a3412 100%)",
+                    "ETAPA 2": "linear-gradient(135deg, #9a3412 0%, #c2410c 100%)",
+                    "ETAPA 3": "linear-gradient(135deg, #c2410c 0%, #ea580c 100%)",
+                    "ETAPA 4": "linear-gradient(135deg, #ea580c 0%, #f97316 100%)",
+                    "ETAPA 5": "linear-gradient(135deg, #f97316 0%, #fb923c 100%)",
+                    "DEFAULT": "linear-gradient(135deg, #ea580c 0%, #9a3412 100%)",
+                    "BORDER": "#ea580c"
+                }
+            elif "Desenvolvimento" in str(prog_name):
+                return {
+                    "ETAPA 1": "linear-gradient(135deg, #4c1d95 0%, #5b21b6 100%)",
+                    "ETAPA 2": "linear-gradient(135deg, #5b21b6 0%, #6d28d9 100%)",
+                    "ETAPA 3": "linear-gradient(135deg, #6d28d9 0%, #7c3aed 100%)",
+                    "ETAPA 4": "linear-gradient(135deg, #7c3aed 0%, #8b5cf6 100%)",
+                    "ETAPA 5": "linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%)",
+                    "DEFAULT": "linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%)",
+                    "BORDER": "#7c3aed"
+                }
+            elif "Institu" in str(prog_name):
+                return {
+                    "ETAPA 1": "linear-gradient(135deg, #881337 0%, #9f1239 100%)",
+                    "ETAPA 2": "linear-gradient(135deg, #9f1239 0%, #be123c 100%)",
+                    "ETAPA 3": "linear-gradient(135deg, #be123c 0%, #e11d48 100%)",
+                    "ETAPA 4": "linear-gradient(135deg, #e11d48 0%, #f43f5e 100%)",
+                    "ETAPA 5": "linear-gradient(135deg, #f43f5e 0%, #fb7185 100%)",
+                    "DEFAULT": "linear-gradient(135deg, #e11d48 0%, #9f1239 100%)",
+                    "BORDER": "#e11d48"
+                }
+            elif "Deskbee" in str(prog_name):
+                return {
+                    "ETAPA 1": "linear-gradient(135deg, #1f2937 0%, #374151 100%)",
+                    "ETAPA 2": "linear-gradient(135deg, #374151 0%, #4b5563 100%)",
+                    "ETAPA 3": "linear-gradient(135deg, #4b5563 0%, #6b7280 100%)",
+                    "ETAPA 4": "linear-gradient(135deg, #6b7280 0%, #9ca3af 100%)",
+                    "ETAPA 5": "linear-gradient(135deg, #9ca3af 0%, #d1d5db 100%)",
+                    "DEFAULT": "linear-gradient(135deg, #4b5563 0%, #171717 100%)",
+                    "BORDER": "#4b5563"
+                }
+            else:
+                return {
+                    "ETAPA 1": "linear-gradient(135deg, #4338ca 0%, #4f46e5 100%)",
+                    "ETAPA 2": "linear-gradient(135deg, #4f46e5 0%, #6366f1 100%)",
+                    "ETAPA 3": "linear-gradient(135deg, #6366f1 0%, #818cf8 100%)",
+                    "ETAPA 4": "linear-gradient(135deg, #818cf8 0%, #a5b4fc 100%)",
+                    "ETAPA 5": "linear-gradient(135deg, #a5b4fc 0%, #c7d2fe 100%)",
+                    "DEFAULT": "linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)",
+                    "BORDER": "#6366f1"
+                }
+
+        html = f'<div class="{card_class}"><div class="month-card-header"><span>{month_name}</span><span>{year}</span></div>'
+        html += f'<table class="calendar-table-premium"><thead><tr><th>Seg</th><th>Ter</th><th>Qua</th><th>Qui</th><th>Sex</th><th>Sáb</th><th>Dom</th></tr></thead><tbody>'
+        
+        for week in cal:
+            html += "<tr>"
+            for d_idx, day in enumerate(week):
+                if day == 0: 
+                    html += f'<td style="min-height: {cell_min_height};"></td>'
+                    continue
+                
+                curr = date(year, month, day)
+                is_today = (curr == today)
+                cell_class = "today-cell" if is_today else ""
+                
+                html += f'<td class="{cell_class}" style="min-height: {cell_min_height};"><div class="day-label">{day}</div>'
+                
+                # Filtrar tarefas do dia
+                d_tasks = m_data[(m_data['dt_inicio'] <= curr) & (m_data['dt_fim'] >= curr)]
+                
+                # Diferenciar etapas principais e subetapas
+                main_col = 'DESCRIÇÃO / SUB-ETAPA'
+                prog_col = 'TEMA / QUADRO'
+                for _, row in d_tasks.iterrows():
+                    name = str(row[main_col]).strip()
+                    etapa_val = str(row['ETAPA']).upper()
+                    cur_prog = str(row[prog_col])
+                    
+                    # Identificar se é subetapa pelo texto da ETAPA ou pelo prefixo da DESCRIÇÃO
+                    is_substep = ('└─' in name) or ('SUB-ETAPA' in etapa_val) or ('SUB ETAPA' in etapa_val)
+                    
+                    # Para a cor, usar apenas a parte inicial (ex: ETAPA 1)
+                    etapa_key = etapa_val.split('-')[0].strip()
+                    
+                    # Pegar as cores específicas DESTE programa
+                    colors = get_colors(cur_prog)
+                    
+                    if not is_substep:
+                        # Selecionar degradê baseado na etapa específica
+                        current_grad = colors.get(etapa_key, colors["DEFAULT"])
+                        show_text = (curr == row['dt_inicio'] or day == 1 or d_idx == 0)
+                        html += f'<div class="timeline-bar-premium" style="background: {current_grad};" title="[{cur_prog}] {name}">{name if show_text else ""}</div>'
+                    elif not hide_substeps:
+                        clean_name = name.replace('└─', '').replace('  ', '').strip()
+                        border_col = colors.get("BORDER", "#cbd5e1")
+                        html += f'<div style="font-size: 0.5rem; color: #374151; background: #f9fafb; border: 1px solid #e5e7eb; border-left: 3px solid {border_col}; border-radius: 4px; padding: 1px 6px; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 700;" title="[{cur_prog}] {clean_name}">○ {clean_name}</div>'
+                
+                html += "</td>"
+            html += "</tr>"
+        st.markdown(html + "</tbody></table></div>", unsafe_allow_html=True)
+
+class ScheduleView:
+    @classmethod
+    def render(cls, tasks: List[Task]) -> None:
         st.markdown(
-            f"""
-            <div style="background: rgba(99, 102, 241, 0.1); border-left: 5px solid #6366f1; border-radius: 8px; padding: 20px; margin-bottom: 25px; display: flex; justify-content: space-between; align-items: center;">
-                <div>
-                    <h2 style="margin: 0; color: #f8fafc; font-weight: 800;">{header_title}</h2>
-                    <p style="margin: 5px 0 0 0; color: #94a3b8; font-size: 0.95rem;">
-                        {"Controle individual de suas compras." if not is_manager else "Visão consolidada de todos os analistas."}
-                    </p>
+            """
+            <div style="background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); 
+                        padding: 30px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.05); 
+                        margin-bottom: 20px; text-align: center;">
+                <h1 style="color: white; font-weight: 800; margin: 0; font-size: 2.2rem; letter-spacing: -0.5px;">
+                    📅 Cronograma Anual
+                </h1>
+                <p style="color: #94a3b8; font-size: 1.1rem; margin-top: 10px; opacity: 0.8;">
+                    Acompanhamento estratégico de prazos e entregas
+                </p>
+            </div>
+            
+            <div style="display: flex; justify-content: center; gap: 20px; margin-bottom: 25px; padding: 10px; background: rgba(255,255,255,0.02); border-radius: 12px; border: 1px solid rgba(255,255,255,0.05);">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span style="color: #94a3b8; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">Prioridades:</span>
+                    <span style="width: 10px; height: 10px; border-radius: 50%; background: #579bfc;"></span> <span style="color: #579bfc; font-size: 0.7rem; font-weight: 600;">Baixa</span>
+                    <span style="width: 10px; height: 10px; border-radius: 50%; background: #fdab3d;"></span> <span style="color: #fdab3d; font-size: 0.7rem; font-weight: 600;">Média</span>
+                    <span style="width: 10px; height: 10px; border-radius: 50%; background: #e44258;"></span> <span style="color: #e44258; font-size: 0.7rem; font-weight: 600;">Alta</span>
+                    <span style="width: 10px; height: 10px; border-radius: 50%; background: #df2f4a;"></span> <span style="color: #df2f4a; font-size: 0.7rem; font-weight: 600;">Urgente</span>
                 </div>
             </div>
             """, unsafe_allow_html=True
         )
 
-        # Filtro de Analista (Apenas para Gestão)
-        filtered_reqs = reqs
-        if is_manager:
-            all_analysts = sorted(list(set([r.buyer if r.buyer else "Não definido" for r in reqs])))
-            selected_analyst = st.multiselect("🔍 Filtrar por Analista", all_analysts, default=all_analysts, key="mgr_filter_analyst")
-            filtered_reqs = [r for r in reqs if (r.buyer if r.buyer else "Não definido") in selected_analyst]
-            st.markdown("---")
+        now = datetime.now()
+        current_year = now.year
+        
+        col_y, col_info, _ = st.columns([2, 3, 7])
+        with col_y:
+            selected_year = st.selectbox("Selecione o Ano", [current_year - 1, current_year, current_year + 1], index=1, label_visibility="collapsed")
+        
+        with col_info:
+            st.markdown(f"<div style='padding-top: 8px; color: #94a3b8; font-size: 0.9rem; font-weight: 600;'>📅 Visualizando {selected_year}</div>", unsafe_allow_html=True)
+        
+        # Agrupar tarefas por mês
+        tasks_by_month = {m: [] for m in range(1, 13)}
+        for t in tasks:
+            try:
+                dt = datetime.strptime(t.due_date, "%Y-%m-%d")
+                if dt.year == selected_year:
+                    tasks_by_month[dt.month].append(t)
+            except:
+                continue
 
-        # Barra de Ações do Topo (Exportar)
-        if filtered_reqs:
-            import io
-            df_exp = pd.DataFrame([asdict(r) for r in filtered_reqs])
-            # Ordenar e renomear
-            cols_to_exp = ['subelement', 'date_opening', 'description', 'rc_code', 'buyer', 'situation', 'po_number', 'nf_tracking']
-            df_exp = df_exp[cols_to_exp]
-            df_exp.columns = ['Subelemento', 'Data Abertura', 'Descrição', 'Código RC', 'Comprador', 'Situação', 'Nº Pedido', 'Status NF']
-            
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df_exp.to_excel(writer, index=False, sheet_name='Requisições')
-            
-            st.download_button(
-                label="📥 Exportar Visão Atual para Excel",
-                data=output.getvalue(),
-                file_name=f"requisicoes_{user_id}_{datetime.now().strftime('%d_%m_%Y')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            st.markdown("<div style='height:20px;'></div>", unsafe_allow_html=True)
+        # Layout em Grid (4 colunas x 3 linhas para os 12 meses)
+        months_per_row = 4
+        for row in range(3):
+            cols = st.columns(months_per_row)
+            for col_idx in range(months_per_row):
+                month_num = row * months_per_row + col_idx + 1
+                month_name = MESES_PT[month_num]
+                month_tasks = tasks_by_month[month_num]
+                
+                with cols[col_idx]:
+                    # Card do Mês
+                    is_current_month = (month_num == now.month and selected_year == now.year)
+                    border_style = "border: 2px solid #6366f1;" if is_current_month else "border: 1px solid rgba(255,255,255,0.05);"
+                    bg_style = "background: rgba(99, 102, 241, 0.05);" if is_current_month else "background: rgba(30, 41, 59, 0.4);"
+                    
+                    month_html = f"""
+                        <div style="{bg_style} {border_style} border-radius: 16px; padding: 15px; min-height: 280px; margin-bottom: 20px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 8px;">
+                                <span style="color: white; font-weight: 700; font-size: 1rem; text-transform: uppercase;">{month_name}</span>
+                                <span style="background: rgba(255,255,255,0.1); color: #94a3b8; padding: 2px 8px; border-radius: 10px; font-size: 0.7rem; font-weight: 700;">{len(month_tasks)} tasks</span>
+                            </div>
+                    """
+                    
+                    if not month_tasks:
+                        month_html += """
+                            <div style="text-align: center; padding: 40px 10px; color: #475569; font-size: 0.75rem; font-style: italic;">
+                                Sem atividades programadas
+                            </div>
+                        """
+                    else:
+                        for t in month_tasks[:5]: # Mostrar apenas as primeiras 5 para não estourar o card
+                            info = t.get_category_info()
+                            prio_color = PRIORITY_CONFIG.get(t.priority, {'color': '#94a3b8'})['color']
+                            status_color = STATUS_CONFIG.get(t.status, {'color': '#94a3b8'})['color']
+                            
+                            due_day = datetime.strptime(t.due_date, "%Y-%m-%d").day
+                            
+                            month_html += f"""
+                                <div style="display: flex; align-items: flex-start; gap: 8px; margin-bottom: 10px; padding: 6px; background: rgba(255,255,255,0.02); border-radius: 6px; border-left: 3px solid {prio_color};">
+                                    <div style="min-width: 24px; font-size: 0.7rem; font-weight: 800; color: #6366f1; padding-top: 2px;">{due_day:02d}</div>
+                                    <div style="flex: 1;">
+                                        <div style="color: #f1f5f9; font-size: 0.75rem; font-weight: 600; line-height: 1.2; margin-bottom: 2px;">{t.title[:30]}{"..." if len(t.title) > 30 else ""}</div>
+                                        <div style="display: flex; gap: 6px; align-items: center;">
+                                            <span style="font-size: 0.6rem; color: #94a3b8;">👤 {t.responsible.split()[0]}</span>
+                                            <span style="font-size: 0.6rem; color: {status_color}; font-weight: 700;">● {t.status}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            """
+                        
+                        if len(month_tasks) > 5:
+                            month_html += f"""
+                                <div style="text-align: center; color: #6366f1; font-size: 0.65rem; font-weight: 700; cursor: pointer; padding-top: 5px;">
+                                    + {len(month_tasks) - 5} mais atividades...
+                                </div>
+                            """
+                            
+                    month_html += "</div>"
+                    st.markdown(month_html, unsafe_allow_html=True)
 
-        # CSS para a Tabela Monday Style
+        # Adicionar CSS extra para animações se necessário
         st.markdown("""
             <style>
-            .req-table-header {
-                display: flex;
-                background: rgba(15, 23, 42, 0.6);
-                padding: 10px 15px;
-                border-radius: 8px 8px 0 0;
-                font-size: 0.75rem;
-                font-weight: 700;
-                color: #94a3b8;
-                text-transform: uppercase;
-                border: 1px solid rgba(255,255,255,0.05);
-                margin-bottom: 5px;
-            }
-            .req-row {
-                background: rgba(255, 255, 255, 0.02);
-                padding: 5px 10px;
-                border: 1px solid rgba(255,255,255,0.05);
-                margin-bottom: 2px;
-                transition: all 0.2s ease;
-            }
-            .req-row:hover {
-                background: rgba(255, 255, 255, 0.05);
-                border-color: rgba(99, 102, 241, 0.3);
-            }
-            .add-btn {
-                color: #6366f1;
-                cursor: pointer;
-                font-size: 0.85rem;
-                font-weight: 600;
-                padding: 10px;
-                display: flex;
-                align-items: center;
-                gap: 5px;
+            .month-card:hover {
+                transform: translateY(-5px);
+                box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+                transition: all 0.3s ease;
             }
             </style>
         """, unsafe_allow_html=True)
 
-        # Definição de Colunas Refinada
-        # [Subelemento, Data, Descrição, Cód RC, Comprador, Situação, Anexos, PO, NF Track, NF Anx, Ações]
-        cols_spec = [1.3, 0.9, 1.8, 1.0, 1.0, 1.3, 0.6, 1.0, 1.4, 0.6, 0.8]
-        
-        # Header
-        h_cols = st.columns(cols_spec)
-        headers = ["Subelemento", "Data RC", "Descrição", "Código-RC", "Comprador", "Situação", "Anx", "Nº Pedido", "NF Acomp.", "NF", "Ações"]
-        for col, head in zip(h_cols, headers):
-            col.markdown(f"<div style='font-size:0.65rem; color:#64748b; text-transform:uppercase; font-weight:800; letter-spacing:0.5px;'>{head}</div>", unsafe_allow_html=True)
-
-        st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
-
-        # Listagem de Requisições
-        for i, r in enumerate(filtered_reqs):
-            with st.container():
-                r_cols = st.columns(cols_spec)
-                
-                # Subelemento
-                new_sub = r_cols[0].text_input("Sub", value=r.subelement, key=f"req_sub_{r.id}", label_visibility="collapsed")
-                if new_sub != r.subelement:
-                    r.subelement = new_sub
-                    dm.save_requests(reqs)
-
-                # Data RC
-                try:
-                    d_val = datetime.strptime(r.date_opening, "%Y-%m-%d")
-                except: d_val = datetime.now()
-                new_date = r_cols[1].date_input("Data", value=d_val, key=f"req_date_{r.id}", label_visibility="collapsed")
-                if new_date.strftime("%Y-%m-%d") != r.date_opening:
-                    r.date_opening = new_date.strftime("%Y-%m-%d")
-                    dm.save_requests(reqs)
-
-                # Descrição
-                new_desc = r_cols[2].text_input("Desc", value=r.description, key=f"req_desc_{r.id}", label_visibility="collapsed")
-                if new_desc != r.description:
-                    r.description = new_desc
-                    dm.save_requests(reqs)
-
-                # Código RC
-                new_rc = r_cols[3].text_input("RC", value=r.rc_code, key=f"req_rc_{r.id}", label_visibility="collapsed")
-                if new_rc != r.rc_code:
-                    r.rc_code = new_rc
-                    dm.save_requests(reqs)
-
-                # Comprador
-                # Buscar analistas disponíveis ou permitir texto
-                ans = sorted(list(set([t.responsible for t in st.session_state.get("tasks", []) if t.responsible])))
-                try:
-                    def_idx = ans.index(r.buyer) + 1 if r.buyer in ans else 0
-                except: def_idx = 0
-                
-                new_buyer = r_cols[4].selectbox("Comp", ["-"] + ans, index=def_idx, key=f"req_buy_{r.id}", label_visibility="collapsed")
-                if new_buyer != r.buyer:
-                    r.buyer = new_buyer if new_buyer != "-" else ""
-                    dm.save_requests(reqs)
-
-                # Situação RC
-                situations = ["Pendente", "Em andamento", "Para revisão", "Concluído"]
-                try:
-                    s_idx = situations.index(r.situation)
-                except: s_idx = 0
-                new_sit = r_cols[5].selectbox("Sit", situations, index=s_idx, key=f"req_sit_{r.id}", label_visibility="collapsed")
-                if new_sit != r.situation:
-                    r.situation = new_sit
-                    dm.save_requests(reqs)
-
-                # Anexos RC (POPOVER PARA UPLOAD)
-                with r_cols[6]:
-                    with st.popover("📎" if r.attachments else "➕", use_container_width=True):
-                        st.markdown("**Anexos da RC**")
-                        if r.attachments:
-                            for file_path in r.attachments:
-                                fn = os.path.basename(file_path)
-                                st.markdown(f"✅ {fn}")
-                        
-                        uploaded = st.file_uploader("Upload", key=f"up_rc_{r.id}", label_visibility="collapsed")
-                        if uploaded:
-                            # Salvar arquivo
-                            save_dir = "attachments/requests"
-                            os.makedirs(save_dir, exist_ok=True)
-                            f_path = os.path.join(save_dir, f"{r.id}_{uploaded.name}")
-                            with open(f_path, "wb") as f:
-                                f.write(uploaded.getbuffer())
-                            r.attachments.append(f_path)
-                            dm.save_requests(reqs)
-                            st.rerun()
-
-                # Número Pedido
-                new_po = r_cols[7].text_input("PO", value=r.po_number, key=f"req_po_{r.id}", label_visibility="collapsed")
-                if new_po != r.po_number:
-                    r.po_number = new_po
-                    dm.save_requests(reqs)
-
-                # NF Acompanhamento
-                nf_opts = ["Aguardando recebimento", "Recebido - Pago", "Pendente Fiscal", "Cancelado"]
-                try:
-                    n_idx = nf_opts.index(r.nf_tracking)
-                except: n_idx = 0
-                new_nf_t = r_cols[8].selectbox("NFT", nf_opts, index=n_idx, key=f"req_nft_{r.id}", label_visibility="collapsed")
-                if new_nf_t != r.nf_tracking:
-                    r.nf_tracking = new_nf_t
-                    dm.save_requests(reqs)
-
-                # NF Anexo (POPOVER PARA UPLOAD)
-                with r_cols[9]:
-                    with st.popover("📄" if r.nf_attachments else "➕", use_container_width=True):
-                        st.markdown("**Anexos de NF**")
-                        if r.nf_attachments:
-                            for file_path in r.nf_attachments:
-                                fn = os.path.basename(file_path)
-                                st.markdown(f"✅ {fn}")
-                        
-                        uploaded_nf = st.file_uploader("Upload NF", key=f"up_nf_{r.id}", label_visibility="collapsed")
-                        if uploaded_nf:
-                            save_dir = "attachments/nf"
-                            os.makedirs(save_dir, exist_ok=True)
-                            f_path = os.path.join(save_dir, f"{r.id}_{uploaded_nf.name}")
-                            with open(f_path, "wb") as f:
-                                f.write(uploaded_nf.getbuffer())
-                            r.nf_attachments.append(f_path)
-                            dm.save_requests(reqs)
-                            st.rerun()
-
-                # Ações
-                act_cols = r_cols[10].columns(2)
-                # Botão Editar (Abre um expander ou modal rápido)
-                if act_cols[0].button("✏️", key=f"req_ed_btn_{r.id}", help="Editar detalhes"):
-                    st.session_state[f"editing_req_{r.id}"] = not st.session_state.get(f"editing_req_{r.id}", False)
-
-                if act_cols[1].button("🗑️", key=f"req_del_btn_{r.id}", help="Excluir"):
-                    st.session_state.requests.pop(i)
-                    dm.save_requests(st.session_state.requests)
-                    st.rerun()
-            
-            # Formulário de edição expandido se ativo
-            if st.session_state.get(f"editing_req_{r.id}"):
-                with st.form(f"form_edit_req_{r.id}"):
-                    st.markdown(f"### ✏️ Editar Detalhes - {r.subelement}")
-                    e_sub = st.text_input("Subelemento", value=r.subelement)
-                    e_desc = st.text_area("Descrição Detalhada", value=r.description)
-                    e_rc = st.text_input("Código RC", value=r.rc_code)
-                    e_po = st.text_input("Número do Pedido", value=r.po_number)
-                    
-                    if st.form_submit_button("💾 Salvar Tudo"):
-                        r.subelement = e_sub
-                        r.description = e_desc
-                        r.rc_code = e_rc
-                        r.po_number = e_po
-                        dm.save_requests(reqs)
-                        st.session_state[f"editing_req_{r.id}"] = False
-                        st.rerun()
-
-        # Botão + Adicionar subelemento (Estilo Linha Final)
-        st.markdown("<div style='height:5px;'></div>", unsafe_allow_html=True)
-        if st.button("➕ Adicionar nova requisição", use_container_width=True, type="secondary"):
-            user_name = st.session_state.get("user_name", "Analista")
-            new_req = RequestRC(subelement="RC", description="", rc_code="", buyer=user_name, situation="Pendente")
-            st.session_state.requests.append(new_req)
-            dm.save_requests(st.session_state.requests)
-            st.rerun()
-
-        st.markdown(
-            """
-            <div style="margin-top: 30px; font-size: 0.8rem; color: #64748b;">
-                💡 <b>Dica:</b> As alterações são salvas automaticamente ao mudar de campo ou selecionar uma opção.
-            </div>
-            """, unsafe_allow_html=True
-        )
 
 
 # ==========================================
@@ -2940,23 +3471,23 @@ def load_custom_css() -> None:
             font-weight: 600 !important;
         }
         
-        /* 2. BUTTONS: DARK SLATE, WHITE TEXT, VISIBLE BORDER (Global Fix) */
         /* 2. BUTTONS: FORCE DARK & CLEAR VISIBILITY */
-        div.stButton > button {
-            background-color: #1e293b !important; /* Dark Slate to match theme */
+        div.stButton > button, div[data-testid="stFormSubmitButton"] > button {
+            background-color: #1e293b !important;
             color: #ffffff !important;
-            border: 1px solid rgba(255, 255, 255, 0.2) !important;
+            border: 1px solid rgba(255, 255, 255, 0.3) !important;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3) !important;
+            font-weight: 700 !important;
         }
         
-        div.stButton > button:hover {
-            background-color: #334155 !important;
+        div.stButton > button:hover, div[data-testid="stFormSubmitButton"] > button:hover {
+            background-color: #6366f1 !important;
             border-color: #ffffff !important;
-            color: #ffffff !important;
         }
         
-        div.stButton > button p {
-             color: #ffffff !important; /* Force text inside button to be white */
+        /* Force text inside any button to be white */
+        div.stButton > button p, div[data-testid="stFormSubmitButton"] > button p, button p {
+             color: #ffffff !important;
         }
 
         /* 3. TASK CARDS: RESTORE WHITE BORDER (User Request) */
@@ -2983,8 +3514,18 @@ def load_custom_css() -> None:
         }
 
         /* 6. FIX MODAL/DIALOG TEXT COLOR */
-        div[role="dialog"] h1, div[role="dialog"] h2, div[role="dialog"] h3, div[role="dialog"] label {
+        div[role="dialog"], div[data-testid="stDialog"], div.stDialog > div {
+             background-color: #1e293b !important;
              color: #f8fafc !important;
+        }
+        div[role="dialog"] h1, div[role="dialog"] h2, div[role="dialog"] h3, div[role="dialog"] label, div[role="dialog"] p {
+             color: #f8fafc !important;
+        }
+        div[role="dialog"] .stForm {
+            background-color: rgba(15, 23, 42, 0.5) !important;
+            padding: 20px;
+            border-radius: 15px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
         }
         
         /* Corrigir Selectbox Dropdown (Opções) */
@@ -3068,11 +3609,14 @@ def load_custom_css() -> None:
             padding-left: 1.5rem;
         }
         .page-header h1 {
-            font-size: 2.2rem;
-            font-weight: 800;
-            color: var(--text-main);
+            font-size: 2.8rem;
+            font-weight: 900;
+            color: #1e293b;
             margin: 0;
-            letter-spacing: -1px;
+            letter-spacing: -1.5px;
+            background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
         }
         .page-header p {
             color: var(--text-dim);
@@ -4157,7 +4701,8 @@ def main() -> None:
         "Quadros": BoardsView,
         "Calendário": CalendarView,
         "Kanban": KanbanView,
-        "Requisições": RequestsView,
+        "Cronograma": RequisiçõesView,
+        "Acompanhamento": ScheduleView,
         "Follow-Up": FollowUpView,
         "Gestão": ManagerDashboardView,
     }
