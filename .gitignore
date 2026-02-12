@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.venv/
+venv/
+ENV/
+
+# Streamlit
+.streamlit/
+
+# Dados locais e temporários
+flow_data*.json
+flow_updates*.json
+flow_requests*.json
+flow_categories*.json
+temp_*.py
+
+# Planilhas (caso não queira versionar dados)
+# gestores.xlsx
+# *.xlsx
+
+# OS
+.DS_Store
+thumbs.db
