@@ -4817,10 +4817,9 @@ class TaskTableView:
         PRIO_OPTS = list(PRIORITY_CONFIG.keys())
         CATS_OPTS = sorted([c["name"] for c in cats.values()])
 
-        st.info("💡 Clique no final de qualquer tabela para **adicionar uma nova linha**. Lembre-se de clicar em 'Salvar Tudo' ao finalizar.", icon="ℹ️")
+        st.info("💡 **AUTOSAVE ATIVO**: Suas alterações são salvas automaticamente ao mudar de célula ou adicionar uma linha.", icon="⚡")
 
         all_changes = {} # Para rastrear edições de variás tabelas
-
         # Iterar sobre categorias que possuem tarefas OU são as padrão
         sorted_cat_names = sorted(grouped_tasks.keys())
         
@@ -4829,6 +4828,71 @@ class TaskTableView:
             # Encontrar info da categoria para o cabeçalho
             cat_info = next((v for v in cats.values() if v["name"] == cat_name), {"color": "#6366f1", "icon": "📁"})
             
+            # --- LÓGICA DE AUTO-SAVE PARA ESTA TABELA ---
+            editor_key = f"editor_{cat_name}"
+            if editor_key in st.session_state:
+                edits = st.session_state[editor_key]
+                # edits é um dict com: 'edited_rows', 'added_rows', 'deleted_rows'
+                if edits.get("edited_rows") or edits.get("added_rows") or edits.get("deleted_rows"):
+                    has_changes = False
+                    existing_tasks_map = {t.id: t for t in st.session_state.tasks}
+                    
+                    # 1. PROCESSAR EDIÇÕES
+                    for row_idx, changed_cols in edits["edited_rows"].items():
+                        # Obter ID da tarefa original (pelo índice da lista cat_tasks)
+                        if row_idx < len(cat_tasks):
+                            task = cat_tasks[row_idx]
+                            if "Assunto" in changed_cols: task.title = changed_cols["Assunto"]
+                            if "Status" in changed_cols: task.status = changed_cols["Status"]
+                            if "Prioridade" in changed_cols: task.priority = changed_cols["Prioridade"]
+                            if "Prazo" in changed_cols: 
+                                p = changed_cols["Prazo"]
+                                task.due_date = p.strftime("%Y-%m-%d") if hasattr(p, "strftime") else str(p)
+                            if "Responsável" in changed_cols: task.responsible = changed_cols["Responsável"]
+                            if "Feedback Gestão" in changed_cols: task.manager_feedback = changed_cols["Feedback Gestão"]
+                            has_changes = True
+
+                    # 2. PROCESSAR ADIÇÕES
+                    for row_data in edits["added_rows"]:
+                        new_title = row_data.get("Assunto", "").strip()
+                        if new_title:
+                            # Prazo default hoje se não informado
+                            p = row_data.get("Prazo", date.today())
+                            p_str = p.strftime("%Y-%m-%d") if hasattr(p, "strftime") else str(p)
+                            
+                            new_t = Task(
+                                title=new_title,
+                                responsible=row_data.get("Responsável", st.session_state.get("user_name", "Maicon")),
+                                category=cat_name,
+                                priority=row_data.get("Prioridade", "Média"),
+                                status=row_data.get("Status", "Pendente"),
+                                due_date=p_str,
+                                manager_feedback=row_data.get("Feedback Gestão", "")
+                            )
+                            st.session_state.tasks.append(new_t)
+                            has_changes = True
+
+                    # 3. PROCESSAR DELEÇÕES
+                    if edits.get("deleted_rows"):
+                        # Criar uma lista de IDs das tarefas a serem deletadas
+                        ids_to_delete = set()
+                        for row_idx in edits["deleted_rows"]:
+                            if row_idx < len(cat_tasks):
+                                ids_to_delete.add(cat_tasks[row_idx].id)
+                        
+                        # Filtrar st.session_state.tasks para remover as tarefas com esses IDs
+                        st.session_state.tasks = [t for t in st.session_state.tasks if t.id not in ids_to_delete]
+                        has_changes = True
+
+                    if has_changes:
+                        st.session_state.data_manager.save_tasks(st.session_state.tasks)
+                        # Limpar o estado para não re-processar no próximo loop
+                        # st.session_state[editor_key] = {"edited_rows": {}, "added_rows": [], "deleted_rows": []}
+                        st.toast(f"✅ Alterações em {cat_name} salvas!")
+                        time.sleep(0.1)
+                        st.rerun()
+
+            # --- RENDERIZAR TABELA ---
             # Se não houver tarefas e não for uma categoria principal, talvez pular? 
             # Mas o usuário quer "uma tabela para Deskbee", então melhor mostrar.
             
@@ -4869,71 +4933,9 @@ class TaskTableView:
                     },
                     key=f"editor_{cat_name}"
                 )
-                all_changes[cat_name] = edited_df
 
         st.markdown("<br>", unsafe_allow_html=True)
         
-        if st.button("💾 SALVAR TODAS AS ALTERAÇÕES", type="primary", use_container_width=True):
-            new_master_tasks = []
-            # Manter tarefas que NÃO estão nas tabelas editadas (filtros etc)
-            # Na verdade, é mais seguro reconstruir a lista baseado em IDs
-            
-            existing_tasks_map = {t.id: t for t in st.session_state.tasks}
-            current_ids_in_editors = set()
-            
-            for cat_name, df_result in all_changes.items():
-                for _, row in df_result.iterrows():
-                    tid = row.get("ID")
-                    
-                    # Tratar valores nulos de novas linhas
-                    title = str(row.get("Assunto", "")).strip()
-                    if not title or title == "None": continue # Pular linhas vazias
-                    
-                    status = row.get("Status", "Pendente")
-                    prio = row.get("Prioridade", "Média")
-                    resp = row.get("Responsável", "Maicon")
-                    feedback = row.get("Feedback Gestão", "")
-                    
-                    # Prazo
-                    due_val = row.get("Prazo")
-                    if hasattr(due_val, "strftime"):
-                        due_str = due_val.strftime("%Y-%m-%d")
-                    else:
-                        due_str = str(due_val) if due_val else date.today().strftime("%Y-%m-%d")
-
-                    if pd.notna(tid) and tid in existing_tasks_map:
-                        # Atualizar existente
-                        task = existing_tasks_map[tid]
-                        task.title = title
-                        task.status = status
-                        task.priority = prio
-                        task.due_date = due_str
-                        task.responsible = resp
-                        task.category = cat_name
-                        task.manager_feedback = feedback
-                        current_ids_in_editors.add(tid)
-                    else:
-                        # Nova tarefa
-                        new_t = Task(
-                            title=title,
-                            responsible=resp,
-                            category=cat_name,
-                            priority=prio,
-                            status=status,
-                            due_date=due_str,
-                            manager_feedback=feedback
-                        )
-                        st.session_state.tasks.append(new_t)
-            
-            # Nota: Remover tarefas? st.data_editor com num_rows="dynamic" permite deletar.
-            # Se sumiu da tabela mas estava nela antes (pelo ID), precisamos deletar do master.
-            # Isso é complexo se houver filtros ativos. Por enquanto vamos focar em Update e Create.
-
-            st.session_state.data_manager.save_tasks(st.session_state.tasks)
-            st.success("Tudo salvo com sucesso!")
-            time.sleep(1)
-            st.rerun()
-
 
 def initialize_app() -> None:
     st.set_page_config(**PAGE_CONFIG)
