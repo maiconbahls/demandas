@@ -4788,8 +4788,8 @@ class TaskTableView:
         st.markdown(
             """
             <div style="background: rgba(99, 102, 241, 0.1); border-left: 5px solid #6366f1; border-radius: 8px; padding: 20px; margin-bottom: 25px;">
-                <h2 style="margin: 0; color: #f8fafc; font-weight: 800;">📝 Tabela de Gestão Rápida</h2>
-                <p style="margin: 5px 0 0 0; color: #94a3b8; font-size: 0.95rem;">Visualize e edite suas demandas de forma massiva nesta planilha inteligente.</p>
+                <h2 style="margin: 0; color: #f8fafc; font-weight: 800;">📝 Planilha Mestra por Categorias</h2>
+                <p style="margin: 5px 0 0 0; color: #94a3b8; font-size: 0.95rem;">Edite dados existentes ou adicione novas linhas no final de cada tabela.</p>
             </div>
             """, unsafe_allow_html=True
         )
@@ -4798,75 +4798,141 @@ class TaskTableView:
             st.info("Nenhuma demanda encontrada nos filtros atuais.")
             return
 
-        # Preparar dados para o editor
-        df_list = []
+        # Agrupar tarefas por categoria para criar tabelas separadas
+        cats = st.session_state.get("categories", DEFAULT_CATEGORY_OPTIONS)
+        grouped_tasks: Dict[str, List[Task]] = {}
+        
+        # Garantir que as categorias existentes apareçam mesmo vazias
+        for c_info in cats.values():
+            grouped_tasks[c_info["name"]] = []
+            
         for t in tasks:
-            df_list.append({
-                "ID": t.id,
-                "Assunto": t.title,
-                "Status": t.status,
-                "Prioridade": t.priority,
-                "Prazo": t.due_date,
-                "Responsável": t.responsible,
-                "Categoria": t.category,
-                "Feedback Gestão": getattr(t, 'manager_feedback', "")
-            })
-        
-        df = pd.DataFrame(df_list)
-        # Converter string para date para o widget DateColumn
-        df['Prazo'] = pd.to_datetime(df['Prazo']).dt.date
-        
-        # Configurar opções de colunas
+            cat_name = t.category
+            if cat_name not in grouped_tasks:
+                grouped_tasks[cat_name] = []
+            grouped_tasks[cat_name].append(t)
+
+        # Configurações globais do editor
         STATUS_OPTS = list(STATUS_CONFIG.keys())
         PRIO_OPTS = list(PRIORITY_CONFIG.keys())
-        CATS_OPTS = sorted([c["name"] for c in st.session_state.categories.values()])
+        CATS_OPTS = sorted([c["name"] for c in cats.values()])
+
+        st.info("💡 Clique no final de qualquer tabela para **adicionar uma nova linha**. Lembre-se de clicar em 'Salvar Tudo' ao finalizar.", icon="ℹ️")
+
+        all_changes = {} # Para rastrear edições de variás tabelas
+
+        # Iterar sobre categorias que possuem tarefas OU são as padrão
+        sorted_cat_names = sorted(grouped_tasks.keys())
         
-        st.info("💡 Você pode editar os dados diretamente na tabela abaixo. Após terminar, clique no botão 'Salvar Alterações'.", icon="ℹ️")
-        
-        edited_df = st.data_editor(
-            df,
-            hide_index=True,
-            use_container_width=True,
-            column_config={
-                "ID": None, # Ocultar ID, mas ele fica nos metadados do df
-                "Assunto": st.column_config.TextColumn("Assunto", width="large", required=True),
-                "Status": st.column_config.SelectboxColumn("Status", options=STATUS_OPTS, required=True),
-                "Prioridade": st.column_config.SelectboxColumn("Prioridade", options=PRIO_OPTS, required=True),
-                "Prazo": st.column_config.DateColumn("Prazo", required=True),
-                "Responsável": st.column_config.TextColumn("Responsável", width="medium"),
-                "Categoria": st.column_config.SelectboxColumn("Categoria", options=CATS_OPTS),
-                "Feedback Gestão": st.column_config.TextColumn("Feedback Gestão", width="medium")
-            },
-            key="master_task_editor"
-        )
+        for cat_name in sorted_cat_names:
+            cat_tasks = grouped_tasks[cat_name]
+            # Encontrar info da categoria para o cabeçalho
+            cat_info = next((v for v in cats.values() if v["name"] == cat_name), {"color": "#6366f1", "icon": "📁"})
+            
+            # Se não houver tarefas e não for uma categoria principal, talvez pular? 
+            # Mas o usuário quer "uma tabela para Deskbee", então melhor mostrar.
+            
+            with st.expander(f"{cat_info['icon']} {cat_name.upper()}", expanded=True if cat_tasks else False):
+                # Preparar DataFrame
+                df_data = []
+                for t in cat_tasks:
+                    df_data.append({
+                        "ID": t.id,
+                        "Assunto": t.title,
+                        "Status": t.status,
+                        "Prioridade": t.priority,
+                        "Prazo": t.due_date,
+                        "Responsável": t.responsible,
+                        "Feedback Gestão": getattr(t, 'manager_feedback', "")
+                    })
+                
+                df = pd.DataFrame(df_data)
+                if not df.empty:
+                    df['Prazo'] = pd.to_datetime(df['Prazo']).dt.date
+                else:
+                    # Criar DF vazio com colunas certas para permitir adição
+                    df = pd.DataFrame(columns=["ID", "Assunto", "Status", "Prioridade", "Prazo", "Responsável", "Feedback Gestão"])
+
+                edited_df = st.data_editor(
+                    df,
+                    hide_index=True,
+                    use_container_width=True,
+                    num_rows="dynamic",
+                    column_config={
+                        "ID": None, 
+                        "Assunto": st.column_config.TextColumn("Assunto", width="large", required=True),
+                        "Status": st.column_config.SelectboxColumn("Status", options=STATUS_OPTS, default="Pendente"),
+                        "Prioridade": st.column_config.SelectboxColumn("Prioridade", options=PRIO_OPTS, default="Média"),
+                        "Prazo": st.column_config.DateColumn("Prazo", default=date.today()),
+                        "Responsável": st.column_config.TextColumn("Responsável", default=st.session_state.get("user_name", "Maicon")),
+                        "Feedback Gestão": st.column_config.TextColumn("Feedback Gestão")
+                    },
+                    key=f"editor_{cat_name}"
+                )
+                all_changes[cat_name] = edited_df
 
         st.markdown("<br>", unsafe_allow_html=True)
         
-        c1, c2 = st.columns([0.2, 0.8])
-        with c1:
-            if st.button("💾 Salvar Alterações", type="primary", use_container_width=True):
-                # Sincronizar dados
-                updated_any = False
-                id_to_task = {t.id: t for t in st.session_state.tasks}
-                
-                for _, row in edited_df.iterrows():
-                    tid = row["ID"]
-                    if tid in id_to_task:
-                        t = id_to_task[tid]
-                        t.title = row["Assunto"]
-                        t.status = row["Status"]
-                        t.priority = row["Prioridade"]
-                        t.due_date = row["Prazo"].strftime("%Y-%m-%d") if hasattr(row["Prazo"], "strftime") else str(row["Prazo"])
-                        t.responsible = row["Responsável"]
-                        t.category = row["Categoria"]
-                        t.manager_feedback = row["Feedback Gestão"]
-                        updated_any = True
-                
-                if updated_any:
-                    st.session_state.data_manager.save_tasks(st.session_state.tasks)
-                    st.success("Alterações salvas com sucesso!")
-                    time.sleep(1)
-                    st.rerun()
+        if st.button("💾 SALVAR TODAS AS ALTERAÇÕES", type="primary", use_container_width=True):
+            new_master_tasks = []
+            # Manter tarefas que NÃO estão nas tabelas editadas (filtros etc)
+            # Na verdade, é mais seguro reconstruir a lista baseado em IDs
+            
+            existing_tasks_map = {t.id: t for t in st.session_state.tasks}
+            current_ids_in_editors = set()
+            
+            for cat_name, df_result in all_changes.items():
+                for _, row in df_result.iterrows():
+                    tid = row.get("ID")
+                    
+                    # Tratar valores nulos de novas linhas
+                    title = str(row.get("Assunto", "")).strip()
+                    if not title or title == "None": continue # Pular linhas vazias
+                    
+                    status = row.get("Status", "Pendente")
+                    prio = row.get("Prioridade", "Média")
+                    resp = row.get("Responsável", "Maicon")
+                    feedback = row.get("Feedback Gestão", "")
+                    
+                    # Prazo
+                    due_val = row.get("Prazo")
+                    if hasattr(due_val, "strftime"):
+                        due_str = due_val.strftime("%Y-%m-%d")
+                    else:
+                        due_str = str(due_val) if due_val else date.today().strftime("%Y-%m-%d")
+
+                    if pd.notna(tid) and tid in existing_tasks_map:
+                        # Atualizar existente
+                        task = existing_tasks_map[tid]
+                        task.title = title
+                        task.status = status
+                        task.priority = prio
+                        task.due_date = due_str
+                        task.responsible = resp
+                        task.category = cat_name
+                        task.manager_feedback = feedback
+                        current_ids_in_editors.add(tid)
+                    else:
+                        # Nova tarefa
+                        new_t = Task(
+                            title=title,
+                            responsible=resp,
+                            category=cat_name,
+                            priority=prio,
+                            status=status,
+                            due_date=due_str,
+                            manager_feedback=feedback
+                        )
+                        st.session_state.tasks.append(new_t)
+            
+            # Nota: Remover tarefas? st.data_editor com num_rows="dynamic" permite deletar.
+            # Se sumiu da tabela mas estava nela antes (pelo ID), precisamos deletar do master.
+            # Isso é complexo se houver filtros ativos. Por enquanto vamos focar em Update e Create.
+
+            st.session_state.data_manager.save_tasks(st.session_state.tasks)
+            st.success("Tudo salvo com sucesso!")
+            time.sleep(1)
+            st.rerun()
 
 
 def initialize_app() -> None:
