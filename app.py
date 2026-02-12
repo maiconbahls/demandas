@@ -1866,7 +1866,7 @@ class CategoryListView:
         .cat-task-info { flex: 1; min-width: 0; }
         .cat-task-title {
             color: #e2e8f0; font-size: 0.88rem; font-weight: 600;
-            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            line-height: 1.4; margin-bottom: 2px;
         }
         .cat-task-meta {
             display: flex; gap: 10px; align-items: center; margin-top: 4px;
