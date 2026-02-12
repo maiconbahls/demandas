@@ -717,10 +717,10 @@ class NavigationSystem:
     NAV_OPTIONS = {
         "Painel": "📊",
         "Quadros": "📋",
+        "Tabela": "🗂️",
         "Calendário": "📅",
         "Categorias": "📂",
         "Cronograma": "📑",
-        "Acompanhamento": "📅",
         "Follow-Up": "💼",
     }
     
@@ -815,14 +815,10 @@ class NavigationSystem:
         
         # Adjust layout based on role
         if is_manager:
-            # 9 slots: 7 Nav + Search + Nova
-            # Reorganize Cols: Navs (7) | Gestão (1) | Search+Nova (Combined or separate?)
-            # Let's use 9 columns
-            # [1, 1, 1, 1, 1, 1, 1.2, 2, 0.8] approx
-            # [1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.4, 2, 1] approx
-             cols = st.columns([1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.4, 2, 1])
+            # Reorganizar Cols para acomodar Tabela
+            cols = st.columns([1.1, 1.1, 1.1, 1.1, 1.1, 1.1, 1.1, 1.3, 2.0, 0.8])
         else:
-             cols = st.columns([1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 2, 0.8])
+            cols = st.columns([1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 2.0, 1.0])
         
         # ... Render standard buttons 0-5 ...
         with cols[0]:
@@ -834,30 +830,34 @@ class NavigationSystem:
                 st.session_state.selected_page = "Quadros"
                 st.rerun()
         with cols[2]:
+            if st.button("🗂️ Tabela", key="nav_Tabela", use_container_width=True, type="primary" if st.session_state.selected_page == "Tabela" else "secondary"):
+                st.session_state.selected_page = "Tabela"
+                st.rerun()
+        with cols[3]:
             if st.button("📅 Calendário", key="nav_Calendário", use_container_width=True, type="primary" if st.session_state.selected_page == "Calendário" else "secondary"):
                 st.session_state.selected_page = "Calendário"
                 st.rerun()
-        with cols[3]:
+        with cols[4]:
             if st.button("📂 Categorias", key="nav_Categorias", use_container_width=True, type="primary" if st.session_state.selected_page == "Categorias" else "secondary"):
                 st.session_state.selected_page = "Categorias"
                 st.rerun()
-        with cols[4]:
+        with cols[5]:
             if st.button("📑 Cronograma", key="nav_Cronograma", use_container_width=True, type="primary" if st.session_state.selected_page == "Cronograma" else "secondary"):
                 st.session_state.selected_page = "Cronograma"
                 st.rerun()
-        with cols[5]:
+        with cols[6]:
             if st.button("💼 Follow-Up", key="nav_Follow-Up", use_container_width=True, type="primary" if st.session_state.selected_page == "Follow-Up" else "secondary"):
                 st.session_state.selected_page = "Follow-Up"
                 st.rerun()
         
         # Manager Tab
-        next_col_idx = 6
+        next_col_idx = 7
         if is_manager:
-            with cols[6]:
+            with cols[7]:
                 if st.button("👩‍💼 Gestão", key="nav_Gestao", use_container_width=True, type="primary" if st.session_state.selected_page == "Gestão" else "secondary"):
                     st.session_state.selected_page = "Gestão"
                     st.rerun()
-            next_col_idx = 7
+            next_col_idx = 8
 
         # Search
         with cols[next_col_idx]:
@@ -4782,6 +4782,93 @@ class ManagerDashboardView:
                 )
 
 
+class TaskTableView:
+    @staticmethod
+    def render(tasks: List[Task]) -> None:
+        st.markdown(
+            """
+            <div style="background: rgba(99, 102, 241, 0.1); border-left: 5px solid #6366f1; border-radius: 8px; padding: 20px; margin-bottom: 25px;">
+                <h2 style="margin: 0; color: #f8fafc; font-weight: 800;">📝 Tabela de Gestão Rápida</h2>
+                <p style="margin: 5px 0 0 0; color: #94a3b8; font-size: 0.95rem;">Visualize e edite suas demandas de forma massiva nesta planilha inteligente.</p>
+            </div>
+            """, unsafe_allow_html=True
+        )
+
+        if not tasks:
+            st.info("Nenhuma demanda encontrada nos filtros atuais.")
+            return
+
+        # Preparar dados para o editor
+        df_list = []
+        for t in tasks:
+            df_list.append({
+                "ID": t.id,
+                "Assunto": t.title,
+                "Status": t.status,
+                "Prioridade": t.priority,
+                "Prazo": t.due_date,
+                "Responsável": t.responsible,
+                "Categoria": t.category,
+                "Feedback Gestão": getattr(t, 'manager_feedback', "")
+            })
+        
+        df = pd.DataFrame(df_list)
+        # Converter string para date para o widget DateColumn
+        df['Prazo'] = pd.to_datetime(df['Prazo']).dt.date
+        
+        # Configurar opções de colunas
+        STATUS_OPTS = list(STATUS_CONFIG.keys())
+        PRIO_OPTS = list(PRIORITY_CONFIG.keys())
+        CATS_OPTS = sorted([c["name"] for c in st.session_state.categories.values()])
+        
+        st.info("💡 Você pode editar os dados diretamente na tabela abaixo. Após terminar, clique no botão 'Salvar Alterações'.", icon="ℹ️")
+        
+        edited_df = st.data_editor(
+            df,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "ID": None, # Ocultar ID, mas ele fica nos metadados do df
+                "Assunto": st.column_config.TextColumn("Assunto", width="large", required=True),
+                "Status": st.column_config.SelectboxColumn("Status", options=STATUS_OPTS, required=True),
+                "Prioridade": st.column_config.SelectboxColumn("Prioridade", options=PRIO_OPTS, required=True),
+                "Prazo": st.column_config.DateColumn("Prazo", required=True),
+                "Responsável": st.column_config.TextColumn("Responsável", width="medium"),
+                "Categoria": st.column_config.SelectboxColumn("Categoria", options=CATS_OPTS),
+                "Feedback Gestão": st.column_config.TextColumn("Feedback Gestão", width="medium")
+            },
+            key="master_task_editor"
+        )
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        c1, c2 = st.columns([0.2, 0.8])
+        with c1:
+            if st.button("💾 Salvar Alterações", type="primary", use_container_width=True):
+                # Sincronizar dados
+                updated_any = False
+                id_to_task = {t.id: t for t in st.session_state.tasks}
+                
+                for _, row in edited_df.iterrows():
+                    tid = row["ID"]
+                    if tid in id_to_task:
+                        t = id_to_task[tid]
+                        t.title = row["Assunto"]
+                        t.status = row["Status"]
+                        t.priority = row["Prioridade"]
+                        t.due_date = row["Prazo"].strftime("%Y-%m-%d") if hasattr(row["Prazo"], "strftime") else str(row["Prazo"])
+                        t.responsible = row["Responsável"]
+                        t.category = row["Categoria"]
+                        t.manager_feedback = row["Feedback Gestão"]
+                        updated_any = True
+                
+                if updated_any:
+                    st.session_state.data_manager.save_tasks(st.session_state.tasks)
+                    st.success("Alterações salvas com sucesso!")
+                    time.sleep(1)
+                    st.rerun()
+
+
 def initialize_app() -> None:
     st.set_page_config(**PAGE_CONFIG)
     load_custom_css()
@@ -5014,6 +5101,7 @@ def main() -> None:
     views = {
         "Painel": DashboardView,
         "Quadros": BoardsView,
+        "Tabela": TaskTableView,
         "Calendário": CalendarView,
         "Categorias": CategoryListView,
         "Cronograma": RequisiçõesView,
