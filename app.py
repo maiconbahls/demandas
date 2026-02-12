@@ -4812,39 +4812,50 @@ class TaskTableView:
                 grouped_tasks[cat_name] = []
             grouped_tasks[cat_name].append(t)
 
-        # Configurações globais do editor
-        STATUS_OPTS = list(STATUS_CONFIG.keys())
-        PRIO_OPTS = list(PRIORITY_CONFIG.keys())
-        CATS_OPTS = sorted([c["name"] for c in cats.values()])
+        # Configurações visuais do editor
+        PRIO_VIEW_MAP = {
+            "Baixa": "🟢 Baixa",
+            "Média": "🟡 Média",
+            "Alta": "🔴 Alta",
+            "Urgente": "⚡ Urgente"
+        }
+        STATUS_VIEW_MAP = {
+            "Pendente": "⏳ Pendente",
+            "Em Andamento": "🔵 Em Andamento",
+            "Para Revisão": "🟣 Revisão",
+            "Concluído": "✅ Concluído"
+        }
+        
+        # Inversos para o Autosave
+        INV_PRIO = {v: k for k, v in PRIO_VIEW_MAP.items()}
+        INV_STATUS = {v: k for k, v in STATUS_VIEW_MAP.items()}
 
+        STATUS_OPTS = list(STATUS_VIEW_MAP.values())
+        PRIO_OPTS = list(PRIO_VIEW_MAP.values())
+        
         st.info("💡 **AUTOSAVE ATIVO**: Suas alterações são salvas automaticamente ao mudar de célula ou adicionar uma linha.", icon="⚡")
 
-        all_changes = {} # Para rastrear edições de variás tabelas
         # Iterar sobre categorias que possuem tarefas OU são as padrão
         sorted_cat_names = sorted(grouped_tasks.keys())
         
         for cat_name in sorted_cat_names:
             cat_tasks = grouped_tasks[cat_name]
-            # Encontrar info da categoria para o cabeçalho
             cat_info = next((v for v in cats.values() if v["name"] == cat_name), {"color": "#6366f1", "icon": "📁"})
             
             # --- LÓGICA DE AUTO-SAVE PARA ESTA TABELA ---
             editor_key = f"editor_{cat_name}"
             if editor_key in st.session_state:
                 edits = st.session_state[editor_key]
-                # edits é um dict com: 'edited_rows', 'added_rows', 'deleted_rows'
                 if edits.get("edited_rows") or edits.get("added_rows") or edits.get("deleted_rows"):
                     has_changes = False
-                    existing_tasks_map = {t.id: t for t in st.session_state.tasks}
                     
                     # 1. PROCESSAR EDIÇÕES
                     for row_idx, changed_cols in edits["edited_rows"].items():
-                        # Obter ID da tarefa original (pelo índice da lista cat_tasks)
                         if row_idx < len(cat_tasks):
                             task = cat_tasks[row_idx]
                             if "Assunto" in changed_cols: task.title = changed_cols["Assunto"]
-                            if "Status" in changed_cols: task.status = changed_cols["Status"]
-                            if "Prioridade" in changed_cols: task.priority = changed_cols["Prioridade"]
+                            if "Status" in changed_cols: task.status = INV_STATUS.get(changed_cols["Status"], changed_cols["Status"])
+                            if "Prioridade" in changed_cols: task.priority = INV_PRIO.get(changed_cols["Prioridade"], changed_cols["Prioridade"])
                             if "Prazo" in changed_cols: 
                                 p = changed_cols["Prazo"]
                                 task.due_date = p.strftime("%Y-%m-%d") if hasattr(p, "strftime") else str(p)
@@ -4856,16 +4867,17 @@ class TaskTableView:
                     for row_data in edits["added_rows"]:
                         new_title = row_data.get("Assunto", "").strip()
                         if new_title:
-                            # Prazo default hoje se não informado
                             p = row_data.get("Prazo", date.today())
                             p_str = p.strftime("%Y-%m-%d") if hasattr(p, "strftime") else str(p)
+                            raw_status = row_data.get("Status", "⏳ Pendente")
+                            raw_prio = row_data.get("Prioridade", "🟡 Média")
                             
                             new_t = Task(
                                 title=new_title,
                                 responsible=row_data.get("Responsável", st.session_state.get("user_name", "Maicon")),
                                 category=cat_name,
-                                priority=row_data.get("Prioridade", "Média"),
-                                status=row_data.get("Status", "Pendente"),
+                                priority=INV_PRIO.get(raw_prio, "Média"),
+                                status=INV_STATUS.get(raw_status, "Pendente"),
                                 due_date=p_str,
                                 manager_feedback=row_data.get("Feedback Gestão", "")
                             )
@@ -4874,37 +4886,29 @@ class TaskTableView:
 
                     # 3. PROCESSAR DELEÇÕES
                     if edits.get("deleted_rows"):
-                        # Criar uma lista de IDs das tarefas a serem deletadas
                         ids_to_delete = set()
                         for row_idx in edits["deleted_rows"]:
                             if row_idx < len(cat_tasks):
                                 ids_to_delete.add(cat_tasks[row_idx].id)
                         
-                        # Filtrar st.session_state.tasks para remover as tarefas com esses IDs
                         st.session_state.tasks = [t for t in st.session_state.tasks if t.id not in ids_to_delete]
                         has_changes = True
 
                     if has_changes:
                         st.session_state.data_manager.save_tasks(st.session_state.tasks)
-                        # Limpar o estado para não re-processar no próximo loop
-                        # st.session_state[editor_key] = {"edited_rows": {}, "added_rows": [], "deleted_rows": []}
                         st.toast(f"✅ Alterações em {cat_name} salvas!")
                         time.sleep(0.1)
                         st.rerun()
 
             # --- RENDERIZAR TABELA ---
-            # Se não houver tarefas e não for uma categoria principal, talvez pular? 
-            # Mas o usuário quer "uma tabela para Deskbee", então melhor mostrar.
-            
             with st.expander(f"{cat_info['icon']} {cat_name.upper()}", expanded=True if cat_tasks else False):
-                # Preparar DataFrame
                 df_data = []
                 for t in cat_tasks:
                     df_data.append({
                         "ID": t.id,
                         "Assunto": t.title,
-                        "Status": t.status,
-                        "Prioridade": t.priority,
+                        "Status": STATUS_VIEW_MAP.get(t.status, t.status),
+                        "Prioridade": PRIO_VIEW_MAP.get(t.priority, t.priority),
                         "Prazo": t.due_date,
                         "Responsável": t.responsible,
                         "Feedback Gestão": getattr(t, 'manager_feedback', "")
@@ -4914,10 +4918,9 @@ class TaskTableView:
                 if not df.empty:
                     df['Prazo'] = pd.to_datetime(df['Prazo']).dt.date
                 else:
-                    # Criar DF vazio com colunas certas para permitir adição
                     df = pd.DataFrame(columns=["ID", "Assunto", "Status", "Prioridade", "Prazo", "Responsável", "Feedback Gestão"])
 
-                edited_df = st.data_editor(
+                st.data_editor(
                     df,
                     hide_index=True,
                     use_container_width=True,
@@ -4925,13 +4928,13 @@ class TaskTableView:
                     column_config={
                         "ID": None, 
                         "Assunto": st.column_config.TextColumn("Assunto", width="large", required=True),
-                        "Status": st.column_config.SelectboxColumn("Status", options=STATUS_OPTS, default="Pendente"),
-                        "Prioridade": st.column_config.SelectboxColumn("Prioridade", options=PRIO_OPTS, default="Média"),
-                        "Prazo": st.column_config.DateColumn("Prazo", default=date.today()),
-                        "Responsável": st.column_config.TextColumn("Responsável", default=st.session_state.get("user_name", "Maicon")),
+                        "Status": st.column_config.SelectboxColumn("Status", options=STATUS_OPTS),
+                        "Prioridade": st.column_config.SelectboxColumn("Prioridade", options=PRIO_OPTS),
+                        "Prazo": st.column_config.DateColumn("Prazo", format="DD/MM/YYYY"),
+                        "Responsável": st.column_config.TextColumn("Responsável"),
                         "Feedback Gestão": st.column_config.TextColumn("Feedback Gestão")
                     },
-                    key=f"editor_{cat_name}"
+                    key=editor_key
                 )
 
         st.markdown("<br>", unsafe_allow_html=True)
